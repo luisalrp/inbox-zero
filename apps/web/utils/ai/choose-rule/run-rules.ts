@@ -28,6 +28,7 @@ import {
   determineConversationStatus,
   updateThreadTrackers,
 } from "@/utils/reply-tracker/handle-conversation-status";
+import { removeConflictingThreadStatusLabels } from "@/utils/reply-tracker/label-helpers";
 import { saveColdEmail } from "@/utils/cold-email/is-cold-email";
 import { internalDateToDate } from "@/utils/date";
 import { ConditionType } from "@/utils/config";
@@ -109,8 +110,7 @@ export async function runRules({
     let reasonToUse = results.reasoning;
 
     if (result.rule && isConversationRule(result.rule.id)) {
-      // Determine which specific sub-rule applies
-      const { specificRule, reason: statusReason } =
+      const { rule: statusRule, reason: statusReason } =
         await determineConversationStatus({
           conversationRules,
           message,
@@ -119,7 +119,7 @@ export async function runRules({
           modelType,
         });
 
-      if (!specificRule) {
+      if (!statusRule) {
         const executedRule: RunRulesResult = {
           rule: null,
           reason: statusReason || "No enabled conversation status rule found",
@@ -130,7 +130,7 @@ export async function runRules({
         continue;
       }
 
-      ruleToExecute = specificRule;
+      ruleToExecute = statusRule;
       reasonToUse = statusReason;
     } else {
       analyzeSenderPatternIfAiMatch({
@@ -177,9 +177,20 @@ function prepareRulesWithMetaRule(rules: RuleWithActions[]): {
     const metaRule = {
       ...template,
       id: CONVERSATION_TRACKING_META_RULE_ID,
-      name: "Conversation Tracking",
-      instructions:
-        "Personal conversations and communication with real people (emails requiring response, FYI updates, discussions, etc). This is the PRIMARY rule for human-to-human email communication.",
+      name: "Conversations",
+      instructions: `Personal conversations and communication with real people. This covers all conversation states: emails you need to reply to, emails you're awaiting replies on, FYI updates from people, and resolved discussions.
+
+Match when:
+- Questions or requests for information/action
+- Personal updates or FYI information from real people
+- Follow-ups on ongoing conversations
+- Conversations that have been resolved or concluded
+
+EXCLUDE:
+- All automated notifications (LinkedIn, GitHub, Slack, Figma, Jira, Facebook, social media platforms, marketing)
+- System emails (order confirmations, receipts, calendar invites)
+
+NOTE: When this rule matches, it should typically be the primary match.`,
       enabled: true,
       runOnThreads: true,
       systemType: null,
@@ -268,13 +279,21 @@ async function executeMatchedRule(
   }
 
   if (isConversationStatusType(rule.systemType)) {
-    await updateThreadTrackers({
-      emailAccountId: emailAccount.id,
-      threadId: message.threadId,
-      messageId: message.id,
-      sentAt: internalDateToDate(message.internalDate),
-      status: rule.systemType,
-    });
+    await Promise.all([
+      removeConflictingThreadStatusLabels({
+        emailAccountId: emailAccount.id,
+        threadId: message.threadId,
+        systemType: rule.systemType,
+        provider: client,
+      }),
+      updateThreadTrackers({
+        emailAccountId: emailAccount.id,
+        threadId: message.threadId,
+        messageId: message.id,
+        sentAt: internalDateToDate(message.internalDate),
+        status: rule.systemType,
+      }),
+    ]);
   }
 
   if (executedRule) {
