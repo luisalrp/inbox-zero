@@ -37,7 +37,7 @@ services:
         condition: service_healthy
     environment:
       SRH_MODE: env
-      SRH_TOKEN: ${SERVICE_PASSWORD_64_REDIS_TOKEN}
+      SRH_TOKEN: ${UPSTASH_REDIS_TOKEN}
       SRH_CONNECTION_STRING: redis://redis:6379
 
   web:
@@ -116,7 +116,7 @@ services:
 
       # Redis Configuration
       UPSTASH_REDIS_URL: http://serverless-redis-http:80
-      UPSTASH_REDIS_TOKEN: ${UPSTASH_REDIS_TOKEN:-}
+      UPSTASH_REDIS_TOKEN: ${${UPSTASH_REDIS_TOKEN}:-}
       REDIS_URL: ${REDIS_URL:-}
 
       # QStash (Optional but recommended - for background job processing)
