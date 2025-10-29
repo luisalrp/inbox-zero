@@ -8,9 +8,9 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-inboxzero}
-      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_64_POSTGRES}
+      POSTGRES_USER: '${POSTGRES_USER:-postgres}'
+      POSTGRES_DB: '${POSTGRES_DB:-inboxzero}'
+      POSTGRES_PASSWORD: '${SERVICE_PASSWORD_64_POSTGRES}'
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -37,8 +37,8 @@ services:
         condition: service_healthy
     environment:
       SRH_MODE: env
-      SRH_TOKEN: ${UPSTASH_REDIS_TOKEN}
-      SRH_CONNECTION_STRING: redis://redis:6379
+      SRH_TOKEN: '${UPSTASH_REDIS_TOKEN}'
+      SRH_CONNECTION_STRING: 'redis://redis:6379'
 
   web:
     image: ghcr.io/elie222/inbox-zero:latest
@@ -61,73 +61,73 @@ services:
       start_period: 60s
     environment:
       # Database
-      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-inboxzero}?schema=public
+      DATABASE_URL: 'postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-inboxzero}?schema=public'
 
       # Base URL (substituted into the app at build time, but also available at runtime)
-      NEXT_PUBLIC_BASE_URL: ${SERVICE_FQDN_WEB}
+      NEXT_PUBLIC_BASE_URL: '${SERVICE_FQDN_WEB}'
 
       # Authentication
-      AUTH_SECRET: ${AUTH_SECRET:-}
+      AUTH_SECRET: '${AUTH_SECRET:-}'
 
       # Gmail OAuth (REQUIRED - User must provide these from Google Cloud Console)
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-      GOOGLE_ENCRYPT_SECRET: ${GOOGLE_ENCRYPT_SECRET:-}
-      GOOGLE_ENCRYPT_SALT: ${GOOGLE_ENCRYPT_SALT:-}
+      GOOGLE_CLIENT_ID: '${GOOGLE_CLIENT_ID:-}'
+      GOOGLE_CLIENT_SECRET: '${GOOGLE_CLIENT_SECRET:-}'
+      GOOGLE_ENCRYPT_SECRET: '${GOOGLE_ENCRYPT_SECRET:-}'
+      GOOGLE_ENCRYPT_SALT: '${GOOGLE_ENCRYPT_SALT:-}'
 
       # Gmail PubSub (for real-time email notifications)
-      GOOGLE_PUBSUB_TOPIC_NAME: ${GOOGLE_PUBSUB_TOPIC_NAME:-}
-      GOOGLE_PUBSUB_VERIFICATION_TOKEN: ${GOOGLE_PUBSUB_VERIFICATION_TOKEN:-}
+      GOOGLE_PUBSUB_TOPIC_NAME: '${GOOGLE_PUBSUB_TOPIC_NAME:-}'
+      GOOGLE_PUBSUB_VERIFICATION_TOKEN: '${GOOGLE_PUBSUB_VERIFICATION_TOKEN:-}'
 
       # Outlook OAuth (Optional - for Microsoft email support)
-      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
-      MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
-      MICROSOFT_ENCRYPT_SECRET: ${MICROSOFT_ENCRYPT_SECRET:-}
-      MICROSOFT_ENCRYPT_SALT: ${MICROSOFT_ENCRYPT_SALT:-}
-      MICROSOFT_WEBHOOK_CLIENT_STATE: ${MICROSOFT_WEBHOOK_CLIENT_STATE:-}
+      MICROSOFT_CLIENT_ID: '${MICROSOFT_CLIENT_ID:-}'
+      MICROSOFT_CLIENT_SECRET: '${MICROSOFT_CLIENT_SECRET:-}'
+      MICROSOFT_ENCRYPT_SECRET: '${MICROSOFT_ENCRYPT_SECRET:-}'
+      MICROSOFT_ENCRYPT_SALT: '${MICROSOFT_ENCRYPT_SALT:-}'
+      MICROSOFT_WEBHOOK_CLIENT_STATE: '${MICROSOFT_WEBHOOK_CLIENT_STATE:-}'
 
       # LLM Configuration (At least one API key required for AI features)
-      DEFAULT_LLM_PROVIDER: ${DEFAULT_LLM_PROVIDER:-anthropic}
-      DEFAULT_LLM_MODEL: ${DEFAULT_LLM_MODEL:-}
+      DEFAULT_LLM_PROVIDER: '${DEFAULT_LLM_PROVIDER:-anthropic}'
+      DEFAULT_LLM_MODEL: '${DEFAULT_LLM_MODEL:-}'
 
       # LLM API Keys (provide at least one)
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      ANTHROPIC_API_KEY: '${ANTHROPIC_API_KEY:-}'
+      OPENROUTER_API_KEY: '${OPENROUTER_API_KEY:-}'
+      OPENAI_API_KEY: '${OPENAI_API_KEY:-}'
+      GOOGLE_API_KEY: '${GOOGLE_API_KEY:-}'
+      GROQ_API_KEY: '${GROQ_API_KEY:-}'
 
       # AWS Bedrock (Optional - for AWS AI models)
-      BEDROCK_ACCESS_KEY: ${BEDROCK_ACCESS_KEY:-}
-      BEDROCK_SECRET_KEY: ${BEDROCK_SECRET_KEY:-}
-      BEDROCK_REGION: ${BEDROCK_REGION:-us-west-2}
+      BEDROCK_ACCESS_KEY: '${BEDROCK_ACCESS_KEY:-}'
+      BEDROCK_SECRET_KEY: '${BEDROCK_SECRET_KEY:-}'
+      BEDROCK_REGION: '${BEDROCK_REGION:-us-west-2}'
 
       # Ollama (Optional - for self-hosted AI models)
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
-      NEXT_PUBLIC_OLLAMA_MODEL: ${NEXT_PUBLIC_OLLAMA_MODEL:-}
+      OLLAMA_BASE_URL: '${OLLAMA_BASE_URL:-}'
+      NEXT_PUBLIC_OLLAMA_MODEL: '${NEXT_PUBLIC_OLLAMA_MODEL:-}'
 
       # Economy LLM (Optional - for cost-efficient AI operations)
-      ECONOMY_LLM_PROVIDER: ${ECONOMY_LLM_PROVIDER:-}
-      ECONOMY_LLM_MODEL: ${ECONOMY_LLM_MODEL:-}
+      ECONOMY_LLM_PROVIDER: '${ECONOMY_LLM_PROVIDER:-}'
+      ECONOMY_LLM_MODEL: '${ECONOMY_LLM_MODEL:-}'
 
       # Internal API
-      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}
-      API_KEY_SALT: ${API_KEY_SALT:-}
+      INTERNAL_API_KEY: '${INTERNAL_API_KEY:-}'
+      API_KEY_SALT: '${API_KEY_SALT:-}'
 
       # Redis Configuration
-      UPSTASH_REDIS_URL: http://serverless-redis-http:80
-      UPSTASH_REDIS_TOKEN: ${UPSTASH_REDIS_TOKEN:-}
-      REDIS_URL: ${REDIS_URL:-}
+      UPSTASH_REDIS_URL: 'http://serverless-redis-http:80'
+      UPSTASH_REDIS_TOKEN: '${UPSTASH_REDIS_TOKEN:-}'
+      REDIS_URL: '${REDIS_URL:-}'
 
       # QStash (Optional but recommended - for background job processing)
-      QSTASH_TOKEN: ${QSTASH_TOKEN:-}
-      QSTASH_CURRENT_SIGNING_KEY: ${QSTASH_CURRENT_SIGNING_KEY:-}
-      QSTASH_NEXT_SIGNING_KEY: ${QSTASH_NEXT_SIGNING_KEY:-}
+      QSTASH_TOKEN: '${QSTASH_TOKEN:-}'
+      QSTASH_CURRENT_SIGNING_KEY: '${QSTASH_CURRENT_SIGNING_KEY:-}'
+      QSTASH_NEXT_SIGNING_KEY: '${QSTASH_NEXT_SIGNING_KEY:-}''
 
       # Application Configuration
-      NEXT_PUBLIC_APP_HOME_PATH: ${NEXT_PUBLIC_APP_HOME_PATH:-/assistant}
-      LOG_ZOD_ERRORS: ${LOG_ZOD_ERRORS:-true}
-      CRON_SECRET: $SERVICE_PASSWORD_64_CRON
+      NEXT_PUBLIC_APP_HOME_PATH: '${NEXT_PUBLIC_APP_HOME_PATH:-/assistant}'
+      LOG_ZOD_ERRORS: '${LOG_ZOD_ERRORS:-true}'
+      CRON_SECRET: '$SERVICE_PASSWORD_64_CRONSECRET'
 
 volumes:
   postgres-data:
