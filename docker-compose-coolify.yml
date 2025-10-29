@@ -8,9 +8,9 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: '${POSTGRES_USER:-postgres}'
-      POSTGRES_DB: '${POSTGRES_DB:-inboxzero}'
-      POSTGRES_PASSWORD: '${SERVICE_PASSWORD_64_POSTGRES}'
+      - 'POSTGRES_USER=${POSTGRES_USER:-postgres}'
+      - 'POSTGRES_DB=${POSTGRES_DB:-inboxzero}'
+      - 'POSTGRES_PASSWORD=${SERVICE_PASSWORD_64_POSTGRES:-password}'
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -37,8 +37,8 @@ services:
         condition: service_healthy
     environment:
       SRH_MODE: env
-      SRH_TOKEN: '${UPSTASH_REDIS_TOKEN}'
-      SRH_CONNECTION_STRING: 'redis://redis:6379'
+      SRH_TOKEN: ${UPSTASH_REDIS_TOKEN}
+      SRH_CONNECTION_STRING: 'redis://redis:6379' # Using `redis` hostname since they're in the same Docker network.
 
   web:
     image: ghcr.io/elie222/inbox-zero:latest
@@ -122,7 +122,7 @@ services:
       # QStash (Optional but recommended - for background job processing)
       QSTASH_TOKEN: '${QSTASH_TOKEN:-}'
       QSTASH_CURRENT_SIGNING_KEY: '${QSTASH_CURRENT_SIGNING_KEY:-}'
-      QSTASH_NEXT_SIGNING_KEY: '${QSTASH_NEXT_SIGNING_KEY:-}''
+      QSTASH_NEXT_SIGNING_KEY: '${QSTASH_NEXT_SIGNING_KEY:-}'
 
       # Application Configuration
       NEXT_PUBLIC_APP_HOME_PATH: '${NEXT_PUBLIC_APP_HOME_PATH:-/assistant}'
