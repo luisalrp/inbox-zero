@@ -127,7 +127,7 @@ services:
       # Application Configuration
       NEXT_PUBLIC_APP_HOME_PATH: ${NEXT_PUBLIC_APP_HOME_PATH:-/assistant}
       LOG_ZOD_ERRORS: ${LOG_ZOD_ERRORS:-true}
-      CRON_SECRET: ${SERVICE_PASSWORD_64_CRON:-}
+      CRON_SECRET: $SERVICE_PASSWORD_64_CRON
 
 volumes:
   postgres-data:
