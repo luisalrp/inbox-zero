@@ -61,7 +61,7 @@ services:
       start_period: 60s
     environment:
       # Database
-      DATABASE_URL: postgresql://${SERVICE_USER_POSTGRES}:${SERVICE_PASSWORD_64_POSTGRES}@db:5432/${POSTGRES_DB:-inboxzero}?schema=public
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-inboxzero}?schema=public
 
       # Base URL (substituted into the app at build time, but also available at runtime)
       NEXT_PUBLIC_BASE_URL: ${SERVICE_FQDN_WEB}
