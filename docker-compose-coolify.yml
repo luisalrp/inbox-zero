@@ -62,6 +62,7 @@ services:
     environment:
       # Database
       DATABASE_URL: 'postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-inboxzero}?schema=public'
+      DIRECT_URL: 'postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-inboxzero}?schema=public'
 
       # Base URL (substituted into the app at build time, but also available at runtime)
       NEXT_PUBLIC_BASE_URL: '${SERVICE_FQDN_WEB}'
