@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
-import type { ColdEmail, Rule } from "@prisma/client";
-import { ColdEmailStatus } from "@prisma/client";
+import type { ColdEmail, Rule } from "@/generated/prisma/client";
+import { ColdEmailStatus } from "@/generated/prisma/enums";
 import prisma from "@/utils/prisma";
 import { DEFAULT_COLD_EMAIL_PROMPT } from "@/utils/cold-email/prompt";
 import { stringifyEmail } from "@/utils/stringify-email";
@@ -34,6 +34,7 @@ export async function isColdEmail({
   aiReason?: string | null;
 }> {
   const logger = createScopedLogger("ai-cold-email").with({
+    emailAccountId: emailAccount.id,
     email: emailAccount.email,
     threadId: email.threadId,
     messageId: email.id,
@@ -57,7 +58,7 @@ export async function isColdEmail({
   const hasPreviousEmail =
     email.date && email.id
       ? await provider.hasPreviousCommunicationsWithSenderOrDomain({
-          from: email.from,
+          from: extractEmailAddress(email.from) || email.from,
           date: email.date,
           messageId: email.id,
         })
@@ -94,11 +95,13 @@ async function isKnownColdEmailSender({
   from: string;
   emailAccountId: string;
 }) {
+  const normalizedFrom = extractEmailAddress(from) || from;
+
   const coldEmail = await prisma.coldEmail.findUnique({
     where: {
       emailAccountId_fromEmail: {
         emailAccountId,
-        fromEmail: from,
+        fromEmail: normalizedFrom,
       },
       status: ColdEmailStatus.AI_LABELED_COLD,
     },
@@ -141,7 +144,7 @@ ${stringifyEmail(email, 500)}
   const modelOptions = getModel(emailAccount.user, modelType);
 
   const generateObject = createGenerateObject({
-    userEmail: emailAccount.email,
+    emailAccount,
     label: "Cold email check",
     modelOptions,
   });

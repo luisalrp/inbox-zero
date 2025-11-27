@@ -5,7 +5,7 @@ import type { EmailProvider } from "@/utils/email/types";
 import { aiDetermineThreadStatus } from "@/utils/ai/reply/determine-thread-status";
 import { getEmailForLLM } from "@/utils/get-email-from-message";
 import { createScopedLogger } from "@/utils/logger";
-import { SystemType, ThreadTrackerType } from "@prisma/client";
+import { SystemType, ThreadTrackerType } from "@/generated/prisma/enums";
 import prisma from "@/utils/prisma";
 import { sortByInternalDate } from "@/utils/date";
 
@@ -22,12 +22,14 @@ export async function determineConversationStatus({
   emailAccount,
   provider,
   modelType,
+  isTest = false,
 }: {
   conversationRules: RuleWithActions[];
   message: ParsedMessage;
   emailAccount: EmailAccountWithAI;
   provider: EmailProvider;
   modelType: ModelType;
+  isTest?: boolean;
 }): Promise<{
   rule: RuleWithActions | null;
   reason: string;
@@ -35,9 +37,13 @@ export async function determineConversationStatus({
   logger.info("Determining conversation status", {
     messageId: message.id,
     threadId: message.threadId,
+    isTest,
   });
 
-  const threadMessages = await provider.getThreadMessages(message.threadId);
+  // For test messages with fake IDs, skip the API call and use the message itself as the thread
+  const threadMessages = isTest
+    ? [message]
+    : await provider.getThreadMessages(message.threadId);
 
   if (!threadMessages?.length) {
     logger.error("No thread messages found");
@@ -57,10 +63,17 @@ export async function determineConversationStatus({
     }),
   );
 
+  // Check if the user sent the last email in the thread
+  const lastMessage = sortedMessages.at(-1);
+  const userSentLastEmail = lastMessage
+    ? provider.isSentMessage(lastMessage)
+    : false;
+
   const { status, rationale } = await aiDetermineThreadStatus({
     emailAccount,
     threadMessages: threadMessagesForLLM,
     modelType,
+    userSentLastEmail,
   });
 
   logger.info("AI determined thread status", {

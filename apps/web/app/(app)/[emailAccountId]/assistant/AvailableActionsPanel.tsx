@@ -1,4 +1,4 @@
-import { ActionType } from "@prisma/client";
+import { ActionType } from "@/generated/prisma/enums";
 import { Card, CardContent } from "@/components/ui/card";
 import { getActionIcon } from "@/utils/action-display";
 import { SectionHeader } from "@/components/Typography";
@@ -33,7 +33,7 @@ const actionTooltips: Partial<Record<ActionType, string>> = {
 export function AvailableActionsPanel() {
   const { provider } = useAccount();
   return (
-    <Card className="h-fit bg-slate-50 dark:bg-slate-900">
+    <Card className="h-fit bg-slate-50 dark:bg-slate-900 hidden sm:block">
       <CardContent className="pt-4">
         <div className="grid gap-2">
           <ActionSection

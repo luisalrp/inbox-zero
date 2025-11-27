@@ -1,6 +1,6 @@
 import useSWR from "swr";
-import { BarChart } from "@tremor/react";
 import type { DateRange } from "react-day-picker";
+import { BarChart } from "@/app/(app)/[emailAccountId]/stats/BarChart";
 import Link from "next/link";
 import { ExternalLinkIcon } from "lucide-react";
 import { usePostHog } from "posthog-js/react";
@@ -30,13 +30,15 @@ import type { Row } from "@/app/(app)/[emailAccountId]/bulk-unsubscribe/types";
 import { useThreads } from "@/hooks/useThreads";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { onAutoArchive } from "@/utils/actions/client";
+import { COLORS } from "@/utils/colors";
 
 export function NewsletterModal(props: {
   newsletter?: Pick<Row, "name" | "unsubscribeLink" | "autoArchived">;
   onClose: (isOpen: boolean) => void;
   refreshInterval?: number;
+  mutate: () => Promise<any>;
 }) {
-  const { newsletter, refreshInterval, onClose } = props;
+  const { newsletter, refreshInterval, onClose, mutate } = props;
 
   const { emailAccountId, userEmail } = useAccount();
 
@@ -46,7 +48,7 @@ export function NewsletterModal(props: {
 
   return (
     <Dialog open={!!newsletter} onOpenChange={onClose}>
-      <DialogContent className="overflow-scroll lg:min-w-[880px] xl:min-w-[1280px]">
+      <DialogContent className="lg:min-w-[880px] xl:min-w-[1280px]">
         {newsletter && (
           <>
             <DialogHeader>
@@ -94,6 +96,7 @@ export function NewsletterModal(props: {
                 emailAccountId={emailAccountId}
                 labels={userLabels}
                 posthog={posthog}
+                mutate={mutate}
               />
             </div>
 
@@ -149,11 +152,11 @@ function EmailsChart(props: {
     <LoadingContent loading={isLoading} error={error}>
       {data && (
         <BarChart
-          className="h-72"
           data={data.result}
-          index="startOfPeriod"
-          categories={["Emails"]}
-          colors={["lime"]}
+          config={{
+            Emails: { label: "Emails", color: COLORS.analytics.green },
+          }}
+          xAxisKey="startOfPeriod"
         />
       )}
     </LoadingContent>

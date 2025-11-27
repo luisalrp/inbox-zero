@@ -13,6 +13,8 @@ const withMDX = nextMdx({
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  output: process.env.DOCKER_BUILD === "true" ? "standalone" : undefined,
+  eslint: { ignoreDuringBuilds: true },
   serverExternalPackages: ["@sentry/nextjs", "@sentry/node"],
   turbopack: {
     rules: {
@@ -48,6 +50,10 @@ const nextConfig: NextConfig = {
       {
         protocol: "https",
         hostname: "images.getinboxzero.com",
+      },
+      {
+        protocol: "https",
+        hostname: "t1.gstatic.com",
       },
     ],
   },

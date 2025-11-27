@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { isDefined } from "@/utils/types";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
-import type { Category } from "@prisma/client";
+import type { Category } from "@/generated/prisma/client";
 import { formatCategoriesForPrompt } from "@/utils/ai/categorize-sender/format-categories";
 import { extractEmailAddress } from "@/utils/email";
 import { getModel } from "@/utils/llms/model";
@@ -89,7 +89,7 @@ ${formatCategoriesForPrompt(categories)}
   const modelOptions = getModel(emailAccount.user, "economy");
 
   const generateObject = createGenerateObject({
-    userEmail: emailAccount.email,
+    emailAccount,
     label: "Categorize senders bulk",
     modelOptions,
   });

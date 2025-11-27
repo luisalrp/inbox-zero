@@ -2,7 +2,7 @@ import { stepCountIs, tool } from "ai";
 import { z } from "zod";
 import type { gmail_v1 } from "@googleapis/gmail";
 import { createGenerateText } from "@/utils/llms";
-import type { Group } from "@prisma/client";
+import type { Group } from "@/generated/prisma/client";
 import { queryBatchMessages } from "@/utils/gmail/message";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
 import { createScopedLogger } from "@/utils/logger";
@@ -84,7 +84,7 @@ Key guidelines:
   const modelOptions = getModel(emailAccount.user);
 
   const generateText = createGenerateText({
-    userEmail: emailAccount.email,
+    emailAccount,
     label: "Create group",
     modelOptions,
   });
@@ -154,7 +154,7 @@ Guidelines:
   const modelOptions = getModel(emailAccount.user);
 
   const generateText = createGenerateText({
-    userEmail: emailAccount.email,
+    emailAccount,
     label: "Verify group criteria",
     modelOptions,
   });

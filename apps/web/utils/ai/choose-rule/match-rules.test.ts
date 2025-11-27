@@ -7,12 +7,11 @@ import {
   evaluateRuleConditions,
 } from "./match-rules";
 import {
-  type GroupItem,
   GroupItemType,
   LogicalOperator,
-  type Prisma,
   SystemType,
-} from "@prisma/client";
+} from "@/generated/prisma/enums";
+import type { GroupItem, Prisma } from "@/generated/prisma/client";
 import type {
   RuleWithActions,
   ParsedMessage,
@@ -28,9 +27,12 @@ import {
   isColdEmailRuleEnabled,
 } from "@/utils/cold-email/cold-email-rule";
 import { isColdEmail } from "@/utils/cold-email/is-cold-email";
+import { createScopedLogger } from "@/utils/logger";
 
 // Run with:
 // pnpm test match-rules.test.ts
+
+const logger = createScopedLogger("test");
 
 const provider = {
   isReplyInThread: vi.fn().mockReturnValue(false),
@@ -59,7 +61,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ from: "test@gmail.com" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
   });
 
   it("should not match when wildcard pattern doesn't match domain", () => {
@@ -68,7 +70,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ from: "test@yahoo.com" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(false);
+    expect(matchesStaticRule(rule, message, logger)).toBe(false);
   });
 
   it("should handle multiple wildcards in pattern", () => {
@@ -77,7 +79,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ subject: "This is important message" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
   });
 
   it("should handle invalid regex patterns gracefully", () => {
@@ -86,7 +88,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ from: "test@example.com" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(false);
+    expect(matchesStaticRule(rule, message, logger)).toBe(false);
   });
 
   it("should return false when no conditions are provided", () => {
@@ -95,7 +97,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ from: "test@example.com" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(false);
+    expect(matchesStaticRule(rule, message, logger)).toBe(false);
   });
 
   it("should match body content with wildcard", () => {
@@ -105,7 +107,7 @@ describe("matchesStaticRule", () => {
       textPlain: "Click here to unsubscribe from our newsletter",
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
   });
 
   it("should match @domain.com", () => {
@@ -114,7 +116,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ from: "test@domain.com" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
   });
 
   it("should match Creator Message subject pattern", () => {
@@ -125,7 +127,7 @@ describe("matchesStaticRule", () => {
       }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
   });
 
   it("should match exact Creator Message subject", () => {
@@ -138,7 +140,7 @@ describe("matchesStaticRule", () => {
       }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
   });
 
   it("should match parentheses in subject", () => {
@@ -147,7 +149,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ subject: "Invoice (PDF)" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
   });
 
   it("should match plus sign in email address", () => {
@@ -156,7 +158,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ from: "user+tag@gmail.com" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
   });
 
   it("should match dots in subject", () => {
@@ -165,7 +167,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ subject: "Order #123.456" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
   });
 
   it("should match dollar signs in subject", () => {
@@ -174,7 +176,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ subject: "Payment $100" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
   });
 
   it("should match curly braces in subject", () => {
@@ -183,7 +185,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ subject: "Template {name}" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
   });
 
   it("should match pipe symbol in subject", () => {
@@ -192,7 +194,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ subject: "Alert | System" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
   });
 
   it("should match question mark in subject", () => {
@@ -201,7 +203,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ subject: "Are you ready?" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
   });
 
   it("should match caret symbol in subject", () => {
@@ -210,7 +212,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ subject: "Version ^1.0" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
   });
 
   it("should match wildcards with special characters", () => {
@@ -219,7 +221,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ subject: "URGENT [Important] Notice" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
   });
 
   it("should match common notification patterns", () => {
@@ -228,7 +230,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ from: "noreply-notification@company.com" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
   });
 
   it("should match receipt patterns", () => {
@@ -237,7 +239,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ subject: "Your receipt from store" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
   });
 
   it("should be case sensitive", () => {
@@ -246,7 +248,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ subject: "urgent" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(false);
+    expect(matchesStaticRule(rule, message, logger)).toBe(false);
   });
 
   it("should handle empty header values gracefully", () => {
@@ -255,7 +257,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ from: "" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(false);
+    expect(matchesStaticRule(rule, message, logger)).toBe(false);
   });
 
   it("should match backslash characters", () => {
@@ -264,7 +266,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ subject: "Path: C:\\Users\\Name" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
   });
 
   it("should match multiple domains separated by pipe characters", () => {
@@ -276,25 +278,25 @@ describe("matchesStaticRule", () => {
     const message1 = getMessage({
       headers: getHeaders({ from: "user@company-a.com" }),
     });
-    expect(matchesStaticRule(rule, message1)).toBe(true);
+    expect(matchesStaticRule(rule, message1, logger)).toBe(true);
 
     // Should match middle domain
     const message2 = getMessage({
       headers: getHeaders({ from: "contact@startup-x.io" }),
     });
-    expect(matchesStaticRule(rule, message2)).toBe(true);
+    expect(matchesStaticRule(rule, message2, logger)).toBe(true);
 
     // Should match last domain
     const message3 = getMessage({
       headers: getHeaders({ from: "info@brand-z.co" }),
     });
-    expect(matchesStaticRule(rule, message3)).toBe(true);
+    expect(matchesStaticRule(rule, message3, logger)).toBe(true);
 
     // Should not match domain not in list
     const message4 = getMessage({
       headers: getHeaders({ from: "test@other-company.com" }),
     });
-    expect(matchesStaticRule(rule, message4)).toBe(false);
+    expect(matchesStaticRule(rule, message4, logger)).toBe(false);
   });
 
   it("should treat pipes as OR operator in 'to' field", () => {
@@ -306,25 +308,25 @@ describe("matchesStaticRule", () => {
     const message1 = getMessage({
       headers: getHeaders({ to: "support@company.com" }),
     });
-    expect(matchesStaticRule(rule, message1)).toBe(true);
+    expect(matchesStaticRule(rule, message1, logger)).toBe(true);
 
     // Should match second email
     const message2 = getMessage({
       headers: getHeaders({ to: "help@company.com" }),
     });
-    expect(matchesStaticRule(rule, message2)).toBe(true);
+    expect(matchesStaticRule(rule, message2, logger)).toBe(true);
 
     // Should match third email
     const message3 = getMessage({
       headers: getHeaders({ to: "contact@company.com" }),
     });
-    expect(matchesStaticRule(rule, message3)).toBe(true);
+    expect(matchesStaticRule(rule, message3, logger)).toBe(true);
 
     // Should not match other email
     const message4 = getMessage({
       headers: getHeaders({ to: "sales@company.com" }),
     });
-    expect(matchesStaticRule(rule, message4)).toBe(false);
+    expect(matchesStaticRule(rule, message4, logger)).toBe(false);
   });
 
   it("should combine wildcards with pipe OR logic in from field", () => {
@@ -336,25 +338,25 @@ describe("matchesStaticRule", () => {
     const message1 = getMessage({
       headers: getHeaders({ from: "weekly@newsletter.com" }),
     });
-    expect(matchesStaticRule(rule, message1)).toBe(true);
+    expect(matchesStaticRule(rule, message1, logger)).toBe(true);
 
     // Should match wildcard + second domain
     const message2 = getMessage({
       headers: getHeaders({ from: "campaign@marketing.org" }),
     });
-    expect(matchesStaticRule(rule, message2)).toBe(true);
+    expect(matchesStaticRule(rule, message2, logger)).toBe(true);
 
     // Should match third pattern with wildcard
     const message3 = getMessage({
       headers: getHeaders({ from: "notifications@example.com" }),
     });
-    expect(matchesStaticRule(rule, message3)).toBe(true);
+    expect(matchesStaticRule(rule, message3, logger)).toBe(true);
 
     // Should not match pattern not in list
     const message4 = getMessage({
       headers: getHeaders({ from: "test@other.com" }),
     });
-    expect(matchesStaticRule(rule, message4)).toBe(false);
+    expect(matchesStaticRule(rule, message4, logger)).toBe(false);
   });
 
   it("should treat pipes as literal characters in subject field", () => {
@@ -365,13 +367,13 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ subject: "Status: Active | Pending | Completed" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
 
     // Should not match partial pipe patterns
     const message2 = getMessage({
       headers: getHeaders({ subject: "Status: Active" }),
     });
-    expect(matchesStaticRule(rule, message2)).toBe(false);
+    expect(matchesStaticRule(rule, message2, logger)).toBe(false);
   });
 
   it("should treat pipes as literal characters in body field", () => {
@@ -383,14 +385,14 @@ describe("matchesStaticRule", () => {
       textPlain: "Please choose option A | B | C from the menu to continue",
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
 
     // Should not match partial pipe patterns
     const message2 = getMessage({
       headers: getHeaders(),
       textPlain: "Please choose option A to continue",
     });
-    expect(matchesStaticRule(rule, message2)).toBe(false);
+    expect(matchesStaticRule(rule, message2, logger)).toBe(false);
   });
 
   it("should handle empty patterns between pipes gracefully", () => {
@@ -400,12 +402,12 @@ describe("matchesStaticRule", () => {
     const message1 = getMessage({
       headers: getHeaders({ from: "test@domain1.com" }),
     });
-    expect(matchesStaticRule(rule, message1)).toBe(true);
+    expect(matchesStaticRule(rule, message1, logger)).toBe(true);
 
     const message2 = getMessage({
       headers: getHeaders({ from: "test@domain2.com" }),
     });
-    expect(matchesStaticRule(rule, message2)).toBe(true);
+    expect(matchesStaticRule(rule, message2, logger)).toBe(true);
   });
 
   it("should handle single pattern without pipes in from field", () => {
@@ -414,7 +416,7 @@ describe("matchesStaticRule", () => {
       headers: getHeaders({ from: "user@single-domain.com" }),
     });
 
-    expect(matchesStaticRule(rule, message)).toBe(true);
+    expect(matchesStaticRule(rule, message, logger)).toBe(true);
   });
 
   it("should handle pipes at beginning and end of from pattern", () => {
@@ -424,12 +426,12 @@ describe("matchesStaticRule", () => {
     const message1 = getMessage({
       headers: getHeaders({ from: "test@domain1.com" }),
     });
-    expect(matchesStaticRule(rule, message1)).toBe(true);
+    expect(matchesStaticRule(rule, message1, logger)).toBe(true);
 
     const message2 = getMessage({
       headers: getHeaders({ from: "test@domain2.com" }),
     });
-    expect(matchesStaticRule(rule, message2)).toBe(true);
+    expect(matchesStaticRule(rule, message2, logger)).toBe(true);
   });
 
   it("should handle mixed conditions with pipes in from and literal pipes in subject", () => {
@@ -445,7 +447,7 @@ describe("matchesStaticRule", () => {
         subject: "Alert | System Status",
       }),
     });
-    expect(matchesStaticRule(rule, message1)).toBe(true);
+    expect(matchesStaticRule(rule, message1, logger)).toBe(true);
 
     // Should match with second domain
     const message2 = getMessage({
@@ -454,7 +456,7 @@ describe("matchesStaticRule", () => {
         subject: "Alert | System Status",
       }),
     });
-    expect(matchesStaticRule(rule, message2)).toBe(true);
+    expect(matchesStaticRule(rule, message2, logger)).toBe(true);
 
     // Should not match with wrong domain
     const message3 = getMessage({
@@ -463,7 +465,7 @@ describe("matchesStaticRule", () => {
         subject: "Alert | System Status",
       }),
     });
-    expect(matchesStaticRule(rule, message3)).toBe(false);
+    expect(matchesStaticRule(rule, message3, logger)).toBe(false);
 
     // Should not match with partial subject
     const message4 = getMessage({
@@ -472,7 +474,7 @@ describe("matchesStaticRule", () => {
         subject: "Alert",
       }),
     });
-    expect(matchesStaticRule(rule, message4)).toBe(false);
+    expect(matchesStaticRule(rule, message4, logger)).toBe(false);
   });
 
   it("should handle complex email patterns with pipes", () => {
@@ -484,25 +486,25 @@ describe("matchesStaticRule", () => {
     const message1 = getMessage({
       headers: getHeaders({ from: "noreply@newsletter.com" }),
     });
-    expect(matchesStaticRule(rule, message1)).toBe(true);
+    expect(matchesStaticRule(rule, message1, logger)).toBe(true);
 
     // Should match second pattern
     const message2 = getMessage({
       headers: getHeaders({ from: "system-notifications@company.com" }),
     });
-    expect(matchesStaticRule(rule, message2)).toBe(true);
+    expect(matchesStaticRule(rule, message2, logger)).toBe(true);
 
     // Should match third pattern with plus and wildcard
     const message3 = getMessage({
       headers: getHeaders({ from: "alerts+billing@service.io" }),
     });
-    expect(matchesStaticRule(rule, message3)).toBe(true);
+    expect(matchesStaticRule(rule, message3, logger)).toBe(true);
 
     // Should not match unrelated pattern
     const message4 = getMessage({
       headers: getHeaders({ from: "user@other.com" }),
     });
-    expect(matchesStaticRule(rule, message4)).toBe(false);
+    expect(matchesStaticRule(rule, message4, logger)).toBe(false);
   });
 
   it("should support comma as separator in from field", () => {
@@ -514,25 +516,25 @@ describe("matchesStaticRule", () => {
     const message1 = getMessage({
       headers: getHeaders({ from: "user@company-a.com" }),
     });
-    expect(matchesStaticRule(rule, message1)).toBe(true);
+    expect(matchesStaticRule(rule, message1, logger)).toBe(true);
 
     // Should match second domain
     const message2 = getMessage({
       headers: getHeaders({ from: "contact@company-b.org" }),
     });
-    expect(matchesStaticRule(rule, message2)).toBe(true);
+    expect(matchesStaticRule(rule, message2, logger)).toBe(true);
 
     // Should match third domain
     const message3 = getMessage({
       headers: getHeaders({ from: "info@startup-x.io" }),
     });
-    expect(matchesStaticRule(rule, message3)).toBe(true);
+    expect(matchesStaticRule(rule, message3, logger)).toBe(true);
 
     // Should not match unlisted domain
     const message4 = getMessage({
       headers: getHeaders({ from: "test@other.com" }),
     });
-    expect(matchesStaticRule(rule, message4)).toBe(false);
+    expect(matchesStaticRule(rule, message4, logger)).toBe(false);
   });
 
   it("should support comma as separator in to field", () => {
@@ -547,6 +549,7 @@ describe("matchesStaticRule", () => {
         getMessage({
           headers: getHeaders({ to: "support@company.com" }),
         }),
+        logger,
       ),
     ).toBe(true);
 
@@ -556,6 +559,7 @@ describe("matchesStaticRule", () => {
         getMessage({
           headers: getHeaders({ to: "help@company.com" }),
         }),
+        logger,
       ),
     ).toBe(true);
 
@@ -565,6 +569,7 @@ describe("matchesStaticRule", () => {
         getMessage({
           headers: getHeaders({ to: "contact@company.com" }),
         }),
+        logger,
       ),
     ).toBe(true);
   });
@@ -578,25 +583,25 @@ describe("matchesStaticRule", () => {
     const message1 = getMessage({
       headers: getHeaders({ from: "admin@company1.com" }),
     });
-    expect(matchesStaticRule(rule, message1)).toBe(true);
+    expect(matchesStaticRule(rule, message1, logger)).toBe(true);
 
     // Should match second domain
     const message2 = getMessage({
       headers: getHeaders({ from: "admin@company2.com" }),
     });
-    expect(matchesStaticRule(rule, message2)).toBe(true);
+    expect(matchesStaticRule(rule, message2, logger)).toBe(true);
 
     // Should match third domain
     const message3 = getMessage({
       headers: getHeaders({ from: "admin@company3.com" }),
     });
-    expect(matchesStaticRule(rule, message3)).toBe(true);
+    expect(matchesStaticRule(rule, message3, logger)).toBe(true);
 
     // Should not match unlisted domain
     const message4 = getMessage({
       headers: getHeaders({ from: "admin@company4.com" }),
     });
-    expect(matchesStaticRule(rule, message4)).toBe(false);
+    expect(matchesStaticRule(rule, message4, logger)).toBe(false);
   });
 
   it("should support mixed separators (pipe, comma, OR)", () => {
@@ -611,6 +616,7 @@ describe("matchesStaticRule", () => {
         getMessage({
           headers: getHeaders({ from: "user@company1.com" }),
         }),
+        logger,
       ),
     ).toBe(true);
 
@@ -620,6 +626,7 @@ describe("matchesStaticRule", () => {
         getMessage({
           headers: getHeaders({ from: "user@company2.com" }),
         }),
+        logger,
       ),
     ).toBe(true);
 
@@ -629,6 +636,7 @@ describe("matchesStaticRule", () => {
         getMessage({
           headers: getHeaders({ from: "user@company3.com" }),
         }),
+        logger,
       ),
     ).toBe(true);
 
@@ -638,6 +646,7 @@ describe("matchesStaticRule", () => {
         getMessage({
           headers: getHeaders({ from: "user@company4.com" }),
         }),
+        logger,
       ),
     ).toBe(true);
   });
@@ -654,6 +663,7 @@ describe("matchesStaticRule", () => {
         getMessage({
           headers: getHeaders({ from: "user@company1.com" }),
         }),
+        logger,
       ),
     ).toBe(true);
 
@@ -663,6 +673,7 @@ describe("matchesStaticRule", () => {
         getMessage({
           headers: getHeaders({ from: "user@company2.com" }),
         }),
+        logger,
       ),
     ).toBe(true);
   });
@@ -679,6 +690,7 @@ describe("matchesStaticRule", () => {
         getMessage({
           headers: getHeaders({ from: "weekly@newsletter.com" }),
         }),
+        logger,
       ),
     ).toBe(true);
 
@@ -688,6 +700,7 @@ describe("matchesStaticRule", () => {
         getMessage({
           headers: getHeaders({ from: "campaign@marketing.org" }),
         }),
+        logger,
       ),
     ).toBe(true);
 
@@ -697,6 +710,7 @@ describe("matchesStaticRule", () => {
         getMessage({
           headers: getHeaders({ from: "notifications@example.com" }),
         }),
+        logger,
       ),
     ).toBe(true);
   });
@@ -713,6 +727,7 @@ describe("matchesStaticRule", () => {
         getMessage({
           headers: getHeaders({ from: "user@company1.com" }),
         }),
+        logger,
       ),
     ).toBe(true);
 
@@ -722,6 +737,7 @@ describe("matchesStaticRule", () => {
         getMessage({
           headers: getHeaders({ from: "user@company2.com" }),
         }),
+        logger,
       ),
     ).toBe(true);
   });
@@ -735,13 +751,13 @@ describe("matchesStaticRule", () => {
     const message1 = getMessage({
       headers: getHeaders({ subject: "Option A, Option B, Option C" }),
     });
-    expect(matchesStaticRule(rule, message1)).toBe(true);
+    expect(matchesStaticRule(rule, message1, logger)).toBe(true);
 
     // Should not match partial
     const message2 = getMessage({
       headers: getHeaders({ subject: "Option A" }),
     });
-    expect(matchesStaticRule(rule, message2)).toBe(false);
+    expect(matchesStaticRule(rule, message2, logger)).toBe(false);
   });
 
   it("should not treat OR as separator in subject field", () => {
@@ -753,13 +769,13 @@ describe("matchesStaticRule", () => {
     const message1 = getMessage({
       headers: getHeaders({ subject: "Status: Active OR Pending" }),
     });
-    expect(matchesStaticRule(rule, message1)).toBe(true);
+    expect(matchesStaticRule(rule, message1, logger)).toBe(true);
 
     // Should not match partial
     const message2 = getMessage({
       headers: getHeaders({ subject: "Status: Active" }),
     });
-    expect(matchesStaticRule(rule, message2)).toBe(false);
+    expect(matchesStaticRule(rule, message2, logger)).toBe(false);
   });
 });
 
@@ -781,6 +797,7 @@ describe("findMatchingRule", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     expect(result.matches[0].rule.id).toBe(rule.id);
@@ -803,6 +820,7 @@ describe("findMatchingRule", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     expect(result.matches[0].rule.id).toBe(rule.id);
@@ -825,6 +843,7 @@ describe("findMatchingRule", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     expect(result.matches).toHaveLength(0);
@@ -856,6 +875,7 @@ describe("findMatchingRule", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     expect(result.matches[0]?.rule.id).toBe(rule.id);
@@ -906,6 +926,7 @@ describe("findMatchingRule", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     // Group didn't match and no other conditions, so rule should NOT match
@@ -952,6 +973,7 @@ describe("findMatchingRule", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     expect(result.matches[0]?.rule.id).toBe(rule.id);
@@ -999,6 +1021,7 @@ describe("findMatchingRule", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     // Should match the first rule only
@@ -1093,6 +1116,7 @@ describe("findMatchingRule", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     expect(result.matches).toHaveLength(1);
@@ -1140,6 +1164,7 @@ describe("findMatchingRule", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     // The rule should be excluded (not matched)
@@ -1181,6 +1206,7 @@ describe("findMatchingRule", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     expect(result.matches[0]?.rule.id).toBe(rule.id);
@@ -1223,6 +1249,7 @@ describe("findMatchingRule", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     // Groups are independent of AND/OR operator - static match should work
@@ -1265,6 +1292,7 @@ describe("findMatchingRule", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     // Should match via learned pattern and short-circuit (not check static)
@@ -1321,6 +1349,7 @@ describe("findMatchingRule", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     // Should match despite the display name format, due to the group rule
@@ -1357,6 +1386,7 @@ describe("filterToReplyPreset", () => {
       potentialMatches,
       message,
       provider,
+      logger,
     );
 
     expect(result).toHaveLength(1);
@@ -1387,6 +1417,7 @@ describe("filterToReplyPreset", () => {
       potentialMatches,
       message,
       provider,
+      logger,
     );
 
     // Should return all rules when no TO_REPLY rule exists
@@ -1431,6 +1462,7 @@ describe("filterToReplyPreset", () => {
       potentialMatches,
       message,
       provider,
+      logger,
     );
 
     // Should filter out TO_REPLY rule
@@ -1479,6 +1511,7 @@ describe("filterToReplyPreset", () => {
       potentialMatches,
       message,
       provider,
+      logger,
     );
 
     // Should keep TO_REPLY rule because sender has replied before
@@ -1516,6 +1549,7 @@ describe("filterToReplyPreset", () => {
       potentialMatches,
       message,
       provider,
+      logger,
     );
 
     // Should keep TO_REPLY rule because received count is low
@@ -1549,6 +1583,7 @@ describe("filterToReplyPreset", () => {
         [toReplyRule],
         message,
         provider,
+        logger,
       );
 
       // All no-reply variations should return the rule (not filtered)
@@ -1582,6 +1617,7 @@ describe("filterToReplyPreset", () => {
       potentialMatches,
       message,
       provider,
+      logger,
     );
 
     // Should return all rules when error occurs
@@ -1607,6 +1643,7 @@ describe("filterToReplyPreset", () => {
       potentialMatches,
       message,
       provider,
+      logger,
     );
 
     // Should return all rules when no sender email
@@ -1708,6 +1745,7 @@ describe("findMatchingRules - Integration Tests", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     expect(getColdEmailRule).toHaveBeenCalledWith(emailAccount.id);
@@ -1750,6 +1788,7 @@ describe("findMatchingRules - Integration Tests", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     expect(getColdEmailRule).toHaveBeenCalledWith(emailAccount.id);
@@ -1790,6 +1829,7 @@ describe("findMatchingRules - Integration Tests", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     expect(isColdEmail).toHaveBeenCalled();
@@ -1830,6 +1870,7 @@ describe("findMatchingRules - Integration Tests", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     expect(result.matches[0]?.rule.id).toBe("calendar-rule");
@@ -1863,6 +1904,7 @@ describe("findMatchingRules - Integration Tests", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     expect(aiChooseRule).toHaveBeenCalledWith(
@@ -1919,6 +1961,7 @@ describe("findMatchingRules - Integration Tests", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     // Should match via learned pattern
@@ -1958,6 +2001,7 @@ describe("findMatchingRules - Integration Tests", () => {
       emailAccount,
       provider: threadProvider,
       modelType: "default",
+      logger,
     });
 
     // Rule should not match because it's a thread and runOnThreads=false
@@ -2071,6 +2115,7 @@ describe("findMatchingRules - Integration Tests", () => {
         emailAccount,
         provider: providerNoThread,
         modelType: "default",
+        logger,
       });
 
       // Should match via static evaluation since groups are empty
@@ -2108,6 +2153,7 @@ describe("findMatchingRules - Integration Tests", () => {
         emailAccount,
         provider: threadProvider,
         modelType: "default",
+        logger,
       });
 
       expect(prisma.executedRule.findMany).toHaveBeenCalledTimes(1);
@@ -2148,6 +2194,7 @@ describe("findMatchingRules - Integration Tests", () => {
         emailAccount,
         provider: threadProvider,
         modelType: "default",
+        logger,
       });
 
       expect(prisma.executedRule.findMany).toHaveBeenCalledTimes(1);
@@ -2180,6 +2227,7 @@ describe("findMatchingRules - Integration Tests", () => {
         emailAccount,
         provider: providerNotThread,
         modelType: "default",
+        logger,
       });
 
       expect(prisma.executedRule.findMany).not.toHaveBeenCalled();
@@ -2211,6 +2259,7 @@ describe("findMatchingRules - Integration Tests", () => {
         emailAccount,
         provider: threadProvider,
         modelType: "default",
+        logger,
       });
 
       expect(prisma.executedRule.findMany).not.toHaveBeenCalled();
@@ -2229,8 +2278,8 @@ describe("findMatchingRules - Integration Tests", () => {
     });
 
     // Should not throw, just return false
-    expect(() => matchesStaticRule(rule, message)).not.toThrow();
-    const result = matchesStaticRule(rule, message);
+    expect(() => matchesStaticRule(rule, message, logger)).not.toThrow();
+    const result = matchesStaticRule(rule, message, logger);
     expect(result).toBe(false);
   });
 
@@ -2259,6 +2308,7 @@ describe("findMatchingRules - Integration Tests", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     // Static matched, so should be sent to AI for AND check
@@ -2291,6 +2341,7 @@ describe("findMatchingRules - Integration Tests", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     // Reasoning should combine existing matchReasons text + AI reason
@@ -2320,7 +2371,7 @@ describe("findMatchingRules - Integration Tests", () => {
     }) as unknown as RegExpConstructor;
 
     try {
-      const matched = matchesStaticRule(rule as any, message as any);
+      const matched = matchesStaticRule(rule as any, message as any, logger);
       expect(matched).toBe(false);
     } finally {
       // restore
@@ -2351,6 +2402,7 @@ describe("findMatchingRules - Integration Tests", () => {
       emailAccount,
       provider,
       modelType: "default",
+      logger,
     });
 
     expect(result.matches.map((m) => m.rule.id)).toEqual([]);
@@ -2384,6 +2436,7 @@ describe("findMatchingRules - Integration Tests", () => {
         emailAccount,
         provider,
         modelType: "default",
+        logger,
       });
 
       // Only one occurrence of dup-rule should remain
@@ -2403,7 +2456,7 @@ describe("evaluateRuleConditions", () => {
       headers: getHeaders({ from: "test@example.com" }),
     });
 
-    const result = evaluateRuleConditions({ rule, message });
+    const result = evaluateRuleConditions({ rule, message, logger });
 
     expect(result.matched).toBe(true);
     expect(result.potentialAiMatch).toBe(false);
@@ -2416,7 +2469,7 @@ describe("evaluateRuleConditions", () => {
       headers: getHeaders({ from: "other@example.com" }),
     });
 
-    const result = evaluateRuleConditions({ rule, message });
+    const result = evaluateRuleConditions({ rule, message, logger });
 
     expect(result.matched).toBe(false);
     expect(result.potentialAiMatch).toBe(false);
@@ -2433,7 +2486,7 @@ describe("evaluateRuleConditions", () => {
     });
     const message = getMessage();
 
-    const result = evaluateRuleConditions({ rule, message });
+    const result = evaluateRuleConditions({ rule, message, logger });
 
     expect(result.matched).toBe(false);
     expect(result.potentialAiMatch).toBe(true);
@@ -2450,7 +2503,7 @@ describe("evaluateRuleConditions", () => {
       headers: getHeaders({ from: "test@example.com" }),
     });
 
-    const result = evaluateRuleConditions({ rule, message });
+    const result = evaluateRuleConditions({ rule, message, logger });
 
     expect(result.matched).toBe(true);
     expect(result.potentialAiMatch).toBe(false);
@@ -2467,7 +2520,7 @@ describe("evaluateRuleConditions", () => {
       headers: getHeaders({ from: "other@example.com" }),
     });
 
-    const result = evaluateRuleConditions({ rule, message });
+    const result = evaluateRuleConditions({ rule, message, logger });
 
     expect(result.matched).toBe(false);
     expect(result.potentialAiMatch).toBe(true);
@@ -2484,7 +2537,7 @@ describe("evaluateRuleConditions", () => {
       headers: getHeaders({ from: "test@example.com" }),
     });
 
-    const result = evaluateRuleConditions({ rule, message });
+    const result = evaluateRuleConditions({ rule, message, logger });
 
     expect(result.matched).toBe(false);
     expect(result.potentialAiMatch).toBe(true);
@@ -2501,7 +2554,7 @@ describe("evaluateRuleConditions", () => {
       headers: getHeaders({ from: "other@example.com" }),
     });
 
-    const result = evaluateRuleConditions({ rule, message });
+    const result = evaluateRuleConditions({ rule, message, logger });
 
     expect(result.matched).toBe(false);
     expect(result.potentialAiMatch).toBe(false);
@@ -2518,7 +2571,7 @@ describe("evaluateRuleConditions", () => {
     });
     const message = getMessage();
 
-    const result = evaluateRuleConditions({ rule, message });
+    const result = evaluateRuleConditions({ rule, message, logger });
 
     expect(result.matched).toBe(false);
     expect(result.potentialAiMatch).toBe(false);
@@ -2535,7 +2588,7 @@ describe("evaluateRuleConditions", () => {
       headers: getHeaders({ from: "other@example.com" }),
     });
 
-    const result = evaluateRuleConditions({ rule, message });
+    const result = evaluateRuleConditions({ rule, message, logger });
 
     expect(result.matched).toBe(false);
     expect(result.potentialAiMatch).toBe(false);

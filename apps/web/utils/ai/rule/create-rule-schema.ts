@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ActionType, LogicalOperator } from "@prisma/client";
+import { ActionType, LogicalOperator } from "@/generated/prisma/enums";
 import { delayInMinutesSchema } from "@/utils/actions/rule.validation";
 import { isMicrosoftProvider } from "@/utils/email/provider-types";
 import { isDefined } from "@/utils/types";
@@ -113,7 +113,9 @@ export const createRuleSchema = (provider: string) =>
   z.object({
     name: z
       .string()
-      .describe("The name of the rule. No need to include 'Rule' in the name."),
+      .describe(
+        "A short, concise name for the rule (preferably a single word). For example: 'Marketing', 'Newsletters', 'Urgent', 'Receipts'. Avoid verbose names like 'Archive and label marketing emails'.",
+      ),
     condition: conditionSchema,
     actions: z.array(actionSchema(provider)).describe("The actions to take"),
   });

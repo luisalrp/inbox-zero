@@ -22,6 +22,10 @@ import { useSignUpEvent } from "@/hooks/useSignupEvent";
 import { isDefined } from "@/utils/types";
 import { StepCompanySize } from "@/app/(app)/[emailAccountId]/onboarding/StepCompanySize";
 import { usePremium } from "@/components/PremiumAlert";
+import {
+  STEP_KEYS,
+  STEP_ORDER,
+} from "@/app/(app)/[emailAccountId]/onboarding/steps";
 
 interface OnboardingContentProps {
   step: number;
@@ -33,34 +37,37 @@ export function OnboardingContent({ step }: OnboardingContentProps) {
 
   useSignUpEvent();
 
-  const steps = [
-    () => <StepIntro onNext={onNext} />,
-    () => <StepFeatures onNext={onNext} />,
-    () => (
+  const stepMap = {
+    [STEP_KEYS.INTRO]: () => <StepIntro onNext={onNext} />,
+    [STEP_KEYS.FEATURES]: () => <StepFeatures onNext={onNext} />,
+    [STEP_KEYS.WHO]: () => (
       <StepWho
         initialRole={data?.role || data?.personaAnalysis?.persona}
         emailAccountId={emailAccountId}
         onNext={onNext}
       />
     ),
-    () => <StepCompanySize onNext={onNext} />,
-    () => (
+    [STEP_KEYS.COMPANY_SIZE]: () => <StepCompanySize onNext={onNext} />,
+    [STEP_KEYS.LABELS]: () => (
       <StepLabels
         provider={provider}
         emailAccountId={emailAccountId}
         onNext={onNext}
       />
     ),
-    () => (
+    [STEP_KEYS.DRAFT]: () => (
       <StepDraft
         provider={provider}
         emailAccountId={emailAccountId}
         onNext={onNext}
       />
     ),
-    // <StepDigest onNext={onNext} />
-    () => <StepCustomRules provider={provider} onNext={onNext} />,
-  ].filter(isDefined);
+    [STEP_KEYS.CUSTOM_RULES]: () => (
+      <StepCustomRules provider={provider} onNext={onNext} />
+    ),
+  };
+
+  const steps = STEP_ORDER.map((key) => stepMap[key]).filter(isDefined);
 
   const { data, mutate } = usePersona();
   const clampedStep = Math.min(Math.max(step, 1), steps.length);

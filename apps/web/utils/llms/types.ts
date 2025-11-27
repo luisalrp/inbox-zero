@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import type { Prisma } from "@/generated/prisma/client";
 
 export type UserAIFields = Prisma.UserGetPayload<{
   select: {
@@ -14,6 +14,8 @@ export type EmailAccountWithAI = Prisma.EmailAccountGetPayload<{
     email: true;
     about: true;
     multiRuleSelectionEnabled: true;
+    timezone: true;
+    calendarBookingLink: true;
     user: {
       select: {
         aiProvider: true;

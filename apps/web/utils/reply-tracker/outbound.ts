@@ -70,6 +70,7 @@ export async function handleOutboundReply({
   const aiResult = await aiDetermineThreadStatus({
     emailAccount,
     threadMessages: threadMessagesForLLM,
+    userSentLastEmail: true,
   });
 
   logger.info("AI determined thread status", { status: aiResult.status });
@@ -81,6 +82,7 @@ export async function handleOutboundReply({
       messageId: message.id,
       systemType: aiResult.status,
       provider,
+      logger,
     }),
     updateThreadTrackers({
       emailAccountId: emailAccount.id,

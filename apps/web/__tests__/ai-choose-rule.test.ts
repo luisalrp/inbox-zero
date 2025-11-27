@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { aiChooseRule } from "@/utils/ai/choose-rule/ai-choose-rule";
-import { ActionType } from "@prisma/client";
+import { ActionType } from "@/generated/prisma/enums";
 import { getEmail, getEmailAccount, getRule } from "@/__tests__/helpers";
 
 // pnpm test-ai ai-choose-rule
@@ -17,7 +17,7 @@ describe.runIf(isAiTest)("aiChooseRule", () => {
       emailAccount: getEmailAccount(),
     });
 
-    expect(result).toEqual({ rules: [], reason: "" });
+    expect(result).toEqual({ rules: [], reason: "No rules to evaluate" });
   });
 
   test("Should return correct rule when only one rule passed", async () => {

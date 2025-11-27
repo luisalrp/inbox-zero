@@ -2,7 +2,8 @@ import { stepCountIs, tool } from "ai";
 import { z } from "zod";
 import { createGenerateText } from "@/utils/llms";
 import { createScopedLogger } from "@/utils/logger";
-import { GroupItemType, LogicalOperator, type Rule } from "@prisma/client";
+import { GroupItemType, LogicalOperator } from "@/generated/prisma/enums";
+import type { Rule } from "@/generated/prisma/client";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
 import type { RuleWithRelations } from "@/utils/rule/types";
 import type { ParsedMessage } from "@/utils/types";
@@ -157,7 +158,7 @@ ${stringifyEmailSimple(getEmailForLLM(originalEmail))}
   const modelOptions = getModel(emailAccount.user, "chat");
 
   const generateText = createGenerateText({
-    userEmail: emailAccount.email,
+    emailAccount,
     label: "Process user request",
     modelOptions,
   });
@@ -387,18 +388,8 @@ ${stringifyEmailSimple(getEmailForLLM(originalEmail))}
               emailAccountId: emailAccount.id,
               provider: emailAccount.account.provider,
               runOnThreads: true,
+              logger,
             });
-
-            if ("error" in rule) {
-              logger.error("Error while creating rule", {
-                error: rule.error,
-              });
-
-              return {
-                error: "Failed to create rule",
-                message: rule.error,
-              };
-            }
 
             createdRules.set(rule.id, rule);
 

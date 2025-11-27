@@ -19,7 +19,7 @@ import {
   generateCheckoutSessionAction,
   getBillingPortalUrlAction,
 } from "@/utils/actions/premium";
-import { PremiumTier } from "@prisma/client";
+import type { PremiumTier } from "@/generated/prisma/enums";
 import { LoadingMiniSpinner } from "@/components/Loading";
 import { cn } from "@/utils";
 import { ManageSubscription } from "@/app/(app)/premium/ManageSubscription";
@@ -56,8 +56,10 @@ export default function Pricing(props: PricingProps) {
   const header = props.header || (
     <div className="mb-12">
       <div className="mx-auto max-w-2xl text-center lg:max-w-4xl">
-        <h2 className="font-cal text-base leading-7 text-blue-600">Pricing</h2>
-        <p className="mt-2 font-cal text-4xl text-gray-900 sm:text-5xl">
+        <h2 className="font-title text-base leading-7 text-blue-600">
+          Pricing
+        </h2>
+        <p className="mt-2 font-title text-4xl text-gray-900 sm:text-5xl">
           Try for free, affordable paid plans
         </p>
       </div>
@@ -95,8 +97,8 @@ export default function Pricing(props: PricingProps) {
                   </Link>
                 </Button>
                 <div className="mx-auto mt-4 max-w-md">
-                  {userPremiumTier === PremiumTier.BUSINESS_MONTHLY ||
-                  userPremiumTier === PremiumTier.BUSINESS_ANNUALLY ? (
+                  {userPremiumTier === "BUSINESS_MONTHLY" ||
+                  userPremiumTier === "BUSINESS_ANNUALLY" ? (
                     <AlertWithButton
                       className="bg-background"
                       variant="blue"
@@ -208,7 +210,7 @@ function PriceTier({
             id={tier.name}
             className={cn(
               tier.mostPopular ? "text-blue-600" : "text-gray-900",
-              "font-cal text-lg leading-8",
+              "font-title text-lg leading-8",
             )}
           >
             {tier.name}

@@ -5,7 +5,7 @@ import {
   getEmail,
   generateSequentialDates,
 } from "@/__tests__/helpers";
-import { SystemType } from "@prisma/client";
+import { SystemType } from "@/generated/prisma/enums";
 
 // Run with: pnpm test-ai determine-thread-status
 
@@ -544,6 +544,68 @@ Platform Support`,
       // The ball is in the user's court to act on the information if they want to.
       // This should be FYI (informational) or TO_REPLY (if user wants to act), but NOT AWAITING_REPLY
       expect([SystemType.FYI, SystemType.TO_REPLY]).toContain(result.status);
+      expect(result.rationale).toBeDefined();
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "identifies ACTIONED when user sends informational email (not FYI)",
+    async () => {
+      const emailAccount = getEmailAccount();
+      const latestMessage = getEmail({
+        from: emailAccount.email,
+        to: "recipient@example.com",
+        subject: "Great speaking",
+        content: `Hey,
+
+Great speaking. To sign up: https://getinboxzero.com
+
+In your specific case I'd recommend adding custom rules to get the most out of it.`,
+      });
+
+      const result = await aiDetermineThreadStatus({
+        emailAccount,
+        threadMessages: [latestMessage],
+      });
+
+      console.debug("Result:", result);
+      // User sent an informational email - should be ACTIONED, not FYI
+      // FYI is only for emails the user RECEIVES
+      expect(result.status).toBe(SystemType.ACTIONED);
+      expect(result.rationale).toBeDefined();
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "auto-converts FYI to ACTIONED when user sends the last email",
+    async () => {
+      const emailAccount = getEmailAccount();
+      const messages = [
+        getEmail({
+          from: "recipient@example.com",
+          to: emailAccount.email,
+          subject: "Question",
+          content: "What's your email?",
+        }),
+        getEmail({
+          from: emailAccount.email,
+          to: "recipient@example.com",
+          subject: "Re: Question",
+          content: "FYI, my email is test@example.com",
+        }),
+      ];
+
+      const result = await aiDetermineThreadStatus({
+        emailAccount,
+        threadMessages: messages,
+      });
+
+      console.debug("Result:", result);
+      // Even if AI determines FYI, it should auto-convert to ACTIONED
+      // because user sent the last email
+      expect(result.status).toBe(SystemType.ACTIONED);
       expect(result.rationale).toBeDefined();
     },
     TIMEOUT,

@@ -5,7 +5,8 @@ import { markMessageAsProcessing } from "@/utils/redis/message-processing";
 import { isAssistantEmail } from "@/utils/assistant/is-assistant-email";
 import { processAssistantEmail } from "@/utils/assistant/process-assistant-email";
 import { handleOutboundMessage } from "@/utils/reply-tracker/handle-outbound";
-import { type EmailAccount, NewsletterStatus } from "@prisma/client";
+import { NewsletterStatus } from "@/generated/prisma/enums";
+import type { EmailAccount } from "@/generated/prisma/client";
 import { extractEmailAddress } from "@/utils/email";
 import { isIgnoredSender } from "@/utils/filter-ignored-senders";
 import type { EmailProvider } from "@/utils/email/types";
@@ -104,7 +105,9 @@ export async function processHistoryItem(
     const isInSentItems = parsedMessage.labelIds?.includes("SENT") || false;
 
     if (!isInInbox && !isInSentItems) {
-      logger.info("Skipping message not in inbox or sent items");
+      logger.info("Skipping message not in inbox or sent items", {
+        labelIds: parsedMessage.labelIds,
+      });
       return;
     }
 
@@ -190,6 +193,7 @@ export async function processHistoryItem(
         emailAccount,
         isTest: false,
         modelType: "default",
+        logger,
       });
     }
   } catch (error: unknown) {
@@ -207,6 +211,9 @@ export async function processHistoryItem(
       }
     }
 
+    logger.error("Error processing message", {
+      error: error instanceof Error ? error.message : String(error),
+    });
     throw error;
   }
 }

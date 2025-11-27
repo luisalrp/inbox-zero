@@ -18,7 +18,7 @@ import type { CleanThreadBody } from "@/app/api/clean/route";
 import { isDefined } from "@/utils/types";
 import { inboxZeroLabels } from "@/utils/label";
 import prisma from "@/utils/prisma";
-import { CleanAction } from "@prisma/client";
+import { CleanAction } from "@/generated/prisma/enums";
 import { updateThread } from "@/utils/redis/clean";
 import { getUnhandledCount } from "@/utils/assess";
 import { getGmailClientForEmail } from "@/utils/account";
@@ -32,7 +32,7 @@ import { ONE_DAY_MS } from "@/utils/date";
 
 export const cleanInboxAction = actionClient
   .metadata({ name: "cleanInbox" })
-  .schema(cleanInboxSchema)
+  .inputSchema(cleanInboxSchema)
   .action(
     async ({
       ctx: { emailAccountId, provider, userId, logger },
@@ -51,6 +51,7 @@ export const cleanInboxAction = actionClient
       const emailProvider = await createEmailProvider({
         emailAccountId,
         provider,
+        logger,
       });
 
       const [markedDoneLabel, processedLabel] = await Promise.all([
@@ -193,7 +194,7 @@ function isMaxEmailsReached(totalEmailsProcessed: number, maxEmails?: number) {
 
 export const undoCleanInboxAction = actionClient
   .metadata({ name: "undoCleanInbox" })
-  .schema(undoCleanInboxSchema)
+  .inputSchema(undoCleanInboxSchema)
   .action(
     async ({
       ctx: { emailAccountId, logger },
@@ -258,7 +259,7 @@ export const undoCleanInboxAction = actionClient
 
 export const changeKeepToDoneAction = actionClient
   .metadata({ name: "changeKeepToDone" })
-  .schema(changeKeepToDoneSchema)
+  .inputSchema(changeKeepToDoneSchema)
   .action(
     async ({
       ctx: { emailAccountId, logger },

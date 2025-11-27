@@ -8,17 +8,11 @@ import { SafeError } from "@/utils/error";
 
 const logger = createScopedLogger("outlook/client");
 
-type AuthOptions = {
-  accessToken?: string | null;
-  refreshToken?: string | null;
-  expiryDate?: number | null;
-  expiresAt?: number | null;
-};
-
 // Wrapper class to hold both the Microsoft Graph client and its access token
 export class OutlookClient {
   private readonly client: Client;
   private readonly accessToken: string;
+  private folderIdCache: Record<string, string> | null = null;
 
   constructor(accessToken: string) {
     this.accessToken = accessToken;
@@ -43,6 +37,14 @@ export class OutlookClient {
 
   getAccessToken(): string {
     return this.accessToken;
+  }
+
+  getFolderIdCache(): Record<string, string> | null {
+    return this.folderIdCache;
+  }
+
+  setFolderIdCache(cache: Record<string, string>): void {
+    this.folderIdCache = cache;
   }
 
   // Helper methods for common operations
@@ -71,13 +73,9 @@ export class OutlookClient {
 }
 
 // Helper to create OutlookClient instance
-const createOutlookClient = (accessToken: string) => {
-  return new OutlookClient(accessToken);
-};
-
-export const getContactsClient = ({ accessToken }: AuthOptions) => {
+export const createOutlookClient = (accessToken: string) => {
   if (!accessToken) throw new SafeError("No access token provided");
-  return createOutlookClient(accessToken);
+  return new OutlookClient(accessToken);
 };
 
 // Similar to Gmail's getGmailClientWithRefresh
@@ -92,7 +90,10 @@ export const getOutlookClientWithRefresh = async ({
   expiresAt: number | null;
   emailAccountId: string;
 }): Promise<OutlookClient> => {
-  if (!refreshToken) throw new SafeError("No refresh token");
+  if (!refreshToken) {
+    logger.error("No refresh token", { emailAccountId });
+    throw new SafeError("No refresh token");
+  }
 
   // Check if token needs refresh
   const expiryDate = expiresAt ? expiresAt : null;
@@ -126,7 +127,57 @@ export const getOutlookClientWithRefresh = async ({
     const tokens = await response.json();
 
     if (!response.ok) {
-      throw new Error(tokens.error_description || "Failed to refresh token");
+      const errorMessage =
+        tokens.error_description || "Failed to refresh token";
+
+      // AADSTS7000215 = Invalid client secret
+      // Happens when Azure AD client secret rotates or refresh token expires
+      // Background processes (watch-manager) will catch and log this as a warning
+      // User-facing flows will show an error prompting reconnection
+      if (errorMessage.includes("AADSTS7000215")) {
+        logger.warn(
+          "Microsoft refresh token failed - user may need to reconnect",
+          {
+            emailAccountId,
+          },
+        );
+      }
+
+      // Microsoft identity platform errors that require user re-authentication:
+      // AADSTS70000 = Scopes unauthorized or expired
+      // AADSTS70008 = Refresh token expired due to inactivity
+      // AADSTS70011 = Invalid scope
+      // AADSTS700082 = Refresh token expired
+      // AADSTS50173 = Invalid grant (refresh token revoked)
+      // AADSTS65001 = User hasn't consented to permissions
+      // AADSTS500011 = Resource principal not found (scope issue)
+      // AADSTS54005 = Authorization code already redeemed
+      // invalid_grant = General token refresh failure
+      const requiresReauth =
+        errorMessage.includes("AADSTS70000") ||
+        errorMessage.includes("AADSTS70008") ||
+        errorMessage.includes("AADSTS70011") ||
+        errorMessage.includes("AADSTS700082") ||
+        errorMessage.includes("AADSTS50173") ||
+        errorMessage.includes("AADSTS65001") ||
+        errorMessage.includes("AADSTS500011") ||
+        errorMessage.includes("AADSTS54005") ||
+        errorMessage.includes("invalid_grant");
+
+      if (requiresReauth) {
+        logger.warn(
+          "Microsoft authorization expired - user needs to reconnect",
+          {
+            emailAccountId,
+            errorMessage,
+          },
+        );
+        throw new SafeError(
+          "Your Microsoft authorization has expired. Please sign out and log in again to reconnect your account.",
+        );
+      }
+
+      throw new Error(errorMessage);
     }
 
     // Save new tokens

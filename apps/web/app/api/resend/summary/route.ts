@@ -7,7 +7,7 @@ import { env } from "@/env";
 import { hasCronSecret } from "@/utils/cron";
 import { captureException } from "@/utils/error";
 import prisma from "@/utils/prisma";
-import { ThreadTrackerType } from "@prisma/client";
+import { ThreadTrackerType } from "@/generated/prisma/enums";
 import { createScopedLogger } from "@/utils/logger";
 import { getMessagesBatch } from "@/utils/gmail/message";
 import { decodeSnippet } from "@/utils/gmail/decode";
@@ -251,12 +251,11 @@ async function sendEmail({
   return { success: true };
 }
 
-export const GET = withEmailAccount(async (request) => {
+export const GET = withEmailAccount("resend/summary", async (request) => {
   // send to self
-  const logger = createScopedLogger("resend/summary");
   const emailAccountId = request.auth.emailAccountId;
 
-  logger.info("Sending summary email to user GET", { emailAccountId });
+  request.logger.info("Sending summary email to user GET", { emailAccountId });
 
   const result = await sendEmail({ emailAccountId, force: true });
 

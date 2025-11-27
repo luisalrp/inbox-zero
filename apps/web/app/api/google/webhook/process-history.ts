@@ -24,6 +24,7 @@ export async function processHistoryForUser(
   options: { startHistoryId?: string },
   logger: Logger,
 ) {
+  const startTime = Date.now();
   const { emailAddress, historyId } = decodedData;
   // All emails in the database are stored in lowercase
   // But it's possible that the email address in the webhook is not
@@ -118,7 +119,8 @@ export async function processHistoryForUser(
       });
     }
 
-    logger.info("Completed processing history");
+    const processingTimeMs = Date.now() - startTime;
+    logger.info("Completed processing history", { processingTimeMs });
 
     return NextResponse.json({ ok: true });
   } catch (error) {
@@ -160,7 +162,16 @@ async function processHistory(options: ProcessHistoryOptions, logger: Logger) {
 
     const allEvents = [
       ...(h.messagesAdded || [])
-        .filter(isInboxOrSentMessage)
+        .filter((m) => {
+          const isRelevant = isInboxOrSentMessage(m);
+          if (!isRelevant) {
+            logger.info("Skipping message not in inbox or sent", {
+              messageId: m.message?.id,
+              labelIds: m.message?.labelIds,
+            });
+          }
+          return isRelevant;
+        })
         .map((m) => ({ type: HistoryEventType.MESSAGE_ADDED, item: m })),
       ...(h.labelsAdded || []).map((m) => ({
         type: HistoryEventType.LABEL_ADDED,

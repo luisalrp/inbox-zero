@@ -1,41 +1,41 @@
 import type { EmailProvider, EmailLabel } from "@/utils/email/types";
-import { createScopedLogger } from "@/utils/logger";
+import type { Logger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
-import { ActionType } from "@prisma/client";
+import { ActionType } from "@/generated/prisma/enums";
 import {
   CONVERSATION_STATUS_TYPES,
   type ConversationStatus,
 } from "./conversation-status-config";
 import { getRuleLabel } from "@/utils/rule/consts";
+import { labelMessageAndSync } from "@/utils/label.server";
 
-type LabelIds = Record<ConversationStatus, string | null>;
+type LabelIds = Record<
+  ConversationStatus,
+  {
+    labelId: string | null;
+    label: string | null;
+  }
+>;
 
 export async function removeConflictingThreadStatusLabels({
   emailAccountId,
   threadId,
   systemType,
   provider,
-  dbLabelIds: providedDbLabelIds,
+  dbLabels: providedDbLabels,
   providerLabels: providedProviderLabels,
+  logger,
 }: {
   emailAccountId: string;
   threadId: string;
   systemType: ConversationStatus;
   provider: EmailProvider;
-  dbLabelIds?: LabelIds;
+  dbLabels?: LabelIds;
   providerLabels?: EmailLabel[];
+  logger: Logger;
 }): Promise<void> {
-  const logger = createScopedLogger("removeConflictingThreadStatusLabels").with(
-    {
-      emailAccountId,
-      threadId,
-      systemType,
-      provider,
-    },
-  );
-
-  const [dbLabelIds, providerLabels] = await Promise.all([
-    providedDbLabelIds ?? getLabelIdsFromDb(emailAccountId),
+  const [dbLabels, providerLabels] = await Promise.all([
+    providedDbLabels ?? getLabelsFromDb(emailAccountId),
     providedProviderLabels ?? provider.getLabels(),
   ]);
 
@@ -44,15 +44,21 @@ export async function removeConflictingThreadStatusLabels({
   for (const type of CONVERSATION_STATUS_TYPES) {
     if (type === systemType) continue;
 
-    let labelId = dbLabelIds[type as ConversationStatus];
-    if (!labelId) {
-      const label = providerLabels.find((l) => l.name === getRuleLabel(type));
-      if (!label?.id) {
+    let label = dbLabels[type as ConversationStatus];
+    if (!label.labelId && !label.label) {
+      const l = providerLabels.find((l) => l.name === getRuleLabel(type));
+      if (!l?.id) {
         continue;
       }
-      labelId = label.id;
+      label = {
+        labelId: l.id,
+        label: l.name,
+      };
     }
-    removeLabelIds.push(labelId);
+    if (!label.labelId) {
+      continue;
+    }
+    removeLabelIds.push(label.labelId);
   }
 
   if (removeLabelIds.length === 0) {
@@ -85,49 +91,59 @@ export async function applyThreadStatusLabel({
   messageId,
   systemType,
   provider,
+  logger,
 }: {
   emailAccountId: string;
   threadId: string;
   messageId: string;
   systemType: ConversationStatus;
   provider: EmailProvider;
+  logger: Logger;
 }): Promise<void> {
-  const logger = createScopedLogger("applyThreadStatusLabel").with({
-    emailAccountId,
-    threadId,
-    messageId,
-    systemType,
-    provider,
-  });
-
-  const [dbLabelIds, providerLabels] = await Promise.all([
-    getLabelIdsFromDb(emailAccountId),
+  const [dbLabels, providerLabels] = await Promise.all([
+    getLabelsFromDb(emailAccountId),
     provider.getLabels(),
   ]);
 
   const addLabel = async () => {
-    let targetLabelId = dbLabelIds[systemType];
+    let targetLabel = dbLabels[systemType];
 
-    if (!targetLabelId) {
+    // If we don't have labelId from DB, fetch/create it
+    if (!targetLabel.labelId) {
       const label =
         providerLabels.find((l) => l.name === getRuleLabel(systemType)) ||
         (await provider.createLabel(getRuleLabel(systemType)));
-      if (label) targetLabelId = label.id;
-
-      if (!targetLabelId) {
-        logger.error("Failed to get or create target label");
-        return;
+      if (label) {
+        targetLabel = {
+          labelId: label.id,
+          label: label.name,
+        };
       }
     }
 
-    return provider
-      .labelMessage({ messageId, labelId: targetLabelId })
-      .catch((error) =>
-        logger.error("Failed to apply thread status label", {
-          labelId: targetLabelId,
-          error,
-        }),
-      );
+    // Must have labelId to proceed
+    if (!targetLabel.labelId) {
+      logger.error("Failed to get or create target label", {
+        systemType,
+        labelName: getRuleLabel(systemType),
+      });
+      return;
+    }
+
+    return labelMessageAndSync({
+      provider,
+      messageId,
+      labelId: targetLabel.labelId,
+      labelName: targetLabel.label,
+      emailAccountId,
+      logger,
+    }).catch((error) =>
+      logger.error("Failed to apply thread status label", {
+        labelId: targetLabel.labelId,
+        labelName: targetLabel.label,
+        error,
+      }),
+    );
   };
 
   await Promise.all([
@@ -136,8 +152,9 @@ export async function applyThreadStatusLabel({
       threadId,
       systemType,
       provider,
-      dbLabelIds,
+      dbLabels,
       providerLabels,
+      logger,
     }),
     addLabel(),
   ]);
@@ -145,7 +162,7 @@ export async function applyThreadStatusLabel({
   logger.info("Thread status label applied successfully");
 }
 
-async function getLabelIdsFromDb(emailAccountId: string): Promise<LabelIds> {
+async function getLabelsFromDb(emailAccountId: string): Promise<LabelIds> {
   const rules = await prisma.rule.findMany({
     where: {
       emailAccountId,
@@ -155,25 +172,28 @@ async function getLabelIdsFromDb(emailAccountId: string): Promise<LabelIds> {
       systemType: true,
       actions: {
         where: { type: ActionType.LABEL },
-        select: { type: true, labelId: true },
+        select: { type: true, labelId: true, label: true },
       },
     },
   });
 
-  const dbLabelIds: LabelIds = {
-    TO_REPLY: null,
-    AWAITING_REPLY: null,
-    FYI: null,
-    ACTIONED: null,
+  const dbLabels: LabelIds = {
+    TO_REPLY: { labelId: null, label: null },
+    AWAITING_REPLY: { labelId: null, label: null },
+    FYI: { labelId: null, label: null },
+    ACTIONED: { labelId: null, label: null },
   };
 
   for (const rule of rules) {
     if (!rule.systemType) continue;
     const labelAction = rule.actions.find((a) => a.type === ActionType.LABEL);
-    if (labelAction?.labelId) {
-      dbLabelIds[rule.systemType as ConversationStatus] = labelAction.labelId;
+    if (labelAction?.labelId || labelAction?.label) {
+      dbLabels[rule.systemType as ConversationStatus] = {
+        labelId: labelAction.labelId,
+        label: labelAction.label,
+      };
     }
   }
 
-  return dbLabelIds;
+  return dbLabels;
 }

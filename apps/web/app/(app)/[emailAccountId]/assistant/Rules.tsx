@@ -10,6 +10,7 @@ import {
   Trash2Icon,
   SparklesIcon,
   InfoIcon,
+  CopyIcon,
 } from "lucide-react";
 import { useMemo } from "react";
 import { LoadingContent } from "@/components/LoadingContent";
@@ -41,7 +42,8 @@ import { Badge } from "@/components/Badge";
 import { getActionColor } from "@/components/PlanBadge";
 import { toastError } from "@/components/Toast";
 import { useRules } from "@/hooks/useRules";
-import { type ActionType, LogicalOperator, SystemType } from "@prisma/client";
+import { LogicalOperator, SystemType } from "@/generated/prisma/enums";
+import type { ActionType } from "@/generated/prisma/client";
 import { useAction } from "next-safe-action/hooks";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { prefixPath } from "@/utils/path";
@@ -51,7 +53,6 @@ import { sortActionsByPriority } from "@/utils/action-sort";
 import { getActionDisplay, getActionIcon } from "@/utils/action-display";
 import { RuleDialog } from "./RuleDialog";
 import { useDialogState } from "@/hooks/useDialogState";
-import { ColdEmailDialog } from "@/app/(app)/[emailAccountId]/cold-email-blocker/ColdEmailDialog";
 import { useChat } from "@/providers/ChatProvider";
 import { useSidebar } from "@/components/ui/sidebar";
 import { useLabels } from "@/hooks/useLabels";
@@ -62,12 +63,14 @@ import {
   getDefaultActions,
 } from "@/utils/rule/consts";
 import { DEFAULT_COLD_EMAIL_PROMPT } from "@/utils/cold-email/prompt";
+import {
+  STEP_KEYS,
+  getStepNumber,
+} from "@/app/(app)/[emailAccountId]/onboarding/steps";
 
 export function Rules({
-  size = "md",
   showAddRuleButton = true,
 }: {
-  size?: "sm" | "md";
   showAddRuleButton?: boolean;
 }) {
   const { data, isLoading, error, mutate } = useRules();
@@ -75,9 +78,11 @@ export function Rules({
   const { setInput } = useChat();
 
   const { userLabels } = useLabels();
-  const ruleDialog = useDialogState<{ ruleId: string; editMode?: boolean }>();
-  const coldEmailDialog = useDialogState();
-
+  const ruleDialog = useDialogState<{
+    ruleId?: string;
+    editMode?: boolean;
+    duplicateRule?: RulesResponse[number];
+  }>();
   const onCreateRule = () => ruleDialog.onOpen();
 
   const { emailAccountId, provider } = useAccount();
@@ -143,11 +148,13 @@ export function Rules({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-16">Enabled</TableHead>
-                  <TableHead>Name</TableHead>
-                  {size === "md" && <TableHead>Condition</TableHead>}
-                  <TableHead>Action</TableHead>
-                  <TableHead>
+                  <TableHead className="w-16 px-2 sm:px-4">Enabled</TableHead>
+                  <TableHead className="px-2 sm:px-4">Name</TableHead>
+                  <TableHead className="hidden sm:table-cell px-2 sm:px-4">
+                    Condition
+                  </TableHead>
+                  <TableHead className="px-2 sm:px-4">Action</TableHead>
+                  <TableHead className="px-2 sm:px-4">
                     {showAddRuleButton && (
                       <div className="flex justify-end">
                         <div className="my-2">
@@ -186,7 +193,7 @@ export function Rules({
                     >
                       <TableCell
                         onClick={(e) => e.stopPropagation()}
-                        className="text-center"
+                        className="text-center p-2 sm:p-4"
                       >
                         <Switch
                           size="sm"
@@ -227,53 +234,53 @@ export function Rules({
                           }}
                         />
                       </TableCell>
-                      <TableCell className="font-medium">{rule.name}</TableCell>
-                      {size === "md" && (
-                        <TableCell>
-                          {(() => {
-                            const systemRuleDesc = getSystemRuleDescription(
-                              rule.systemType,
-                            );
-                            if (isConversationStatus) {
-                              return (
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm text-muted-foreground">
-                                    {systemRuleDesc?.condition || ""}
-                                  </span>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <InfoIcon className="size-3.5 text-green-600 dark:text-green-500 flex-shrink-0 cursor-help" />
-                                    </TooltipTrigger>
-                                    <TooltipContent
-                                      side="right"
-                                      className="max-w-xs"
-                                    >
-                                      <p>
-                                        System rule to track conversation
-                                        status. Conditions cannot be edited.
-                                      </p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                </div>
-                              );
-                            }
+                      <TableCell className="font-medium p-2 sm:p-4">
+                        {rule.name}
+                      </TableCell>
+                      <TableCell className="hidden sm:table-cell p-2 sm:p-4">
+                        {(() => {
+                          const systemRuleDesc = getSystemRuleDescription(
+                            rule.systemType,
+                          );
+                          if (isConversationStatus) {
                             return (
-                              <ExpandableText
-                                text={conditionsToString(rule)}
-                                className="max-w-xs"
-                              />
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm text-muted-foreground">
+                                  {systemRuleDesc?.condition || ""}
+                                </span>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <InfoIcon className="size-3.5 text-green-600 dark:text-green-500 flex-shrink-0 cursor-help" />
+                                  </TooltipTrigger>
+                                  <TooltipContent
+                                    side="right"
+                                    className="max-w-xs"
+                                  >
+                                    <p>
+                                      System rule to track conversation status.
+                                      Conditions cannot be edited.
+                                    </p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </div>
                             );
-                          })()}
-                        </TableCell>
-                      )}
-                      <TableCell>
+                          }
+                          return (
+                            <ExpandableText
+                              text={conditionsToString(rule)}
+                              className="max-w-xs"
+                            />
+                          );
+                        })()}
+                      </TableCell>
+                      <TableCell className="p-2 sm:p-4">
                         <ActionBadges
                           actions={rule.actions}
                           provider={provider}
                           labels={userLabels}
                         />
                       </TableCell>
-                      <TableCell className="text-center">
+                      <TableCell className="text-center p-2 sm:p-4">
                         {!isPlaceholder && (
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
@@ -293,14 +300,10 @@ export function Rules({
                             >
                               <DropdownMenuItem
                                 onClick={() => {
-                                  if (isColdEmailBlocker) {
-                                    coldEmailDialog.onOpen();
-                                  } else {
-                                    ruleDialog.onOpen({
-                                      ruleId: rule.id,
-                                      editMode: true,
-                                    });
-                                  }
+                                  ruleDialog.onOpen({
+                                    ruleId: rule.id,
+                                    editMode: true,
+                                  });
                                 }}
                               >
                                 <PenIcon className="mr-2 size-4" />
@@ -319,6 +322,16 @@ export function Rules({
                                   Edit via AI
                                 </DropdownMenuItem>
                               )}
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  ruleDialog.onOpen({
+                                    duplicateRule: rule,
+                                  });
+                                }}
+                              >
+                                <CopyIcon className="mr-2 size-4" />
+                                Duplicate
+                              </DropdownMenuItem>
                               <DropdownMenuItem asChild>
                                 <Link
                                   href={
@@ -399,6 +412,7 @@ export function Rules({
 
       <RuleDialog
         ruleId={ruleDialog.data?.ruleId}
+        duplicateRule={ruleDialog.data?.duplicateRule}
         isOpen={ruleDialog.isOpen}
         onClose={ruleDialog.onClose}
         onSuccess={() => {
@@ -406,11 +420,6 @@ export function Rules({
           ruleDialog.onClose();
         }}
         editMode={ruleDialog.data?.editMode}
-      />
-
-      <ColdEmailDialog
-        isOpen={coldEmailDialog.isOpen}
-        onClose={coldEmailDialog.onClose}
       />
     </div>
   );
@@ -434,7 +443,7 @@ export function ActionBadges({
   labels: Array<{ id: string; name: string }>;
 }) {
   return (
-    <div className="flex gap-2 flex-wrap">
+    <div className="flex gap-2 flex-wrap min-w-0">
       {sortActionsByPriority(actions).map((action) => {
         const Icon = getActionIcon(action.type);
 
@@ -442,9 +451,9 @@ export function ActionBadges({
           <Badge
             key={action.id}
             color={getActionColor(action.type)}
-            className="w-fit text-nowrap"
+            className="w-fit sm:text-nowrap shrink-0"
           >
-            <Icon className="size-3 mr-1.5" />
+            <Icon className="size-3 mr-1.5 hidden sm:block" />
             {getActionDisplay(action, provider, labels)}
           </Badge>
         );
@@ -462,7 +471,12 @@ function NoRules() {
         You don't have any rules yet.
         <div>
           <Button asChild size="sm">
-            <Link href={prefixPath(emailAccountId, "/assistant/onboarding")}>
+            <Link
+              href={prefixPath(
+                emailAccountId,
+                `/onboarding?step=${getStepNumber(STEP_KEYS.LABELS)}`,
+              )}
+            >
               Set up default rules
             </Link>
           </Button>
