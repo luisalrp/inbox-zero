@@ -53,6 +53,9 @@ services:
     build:
       context: .
       dockerfile: ./docker/Dockerfile.prod
+      command: npx next start -H 0.0.0.0 -p 3000
+      expose:
+      - "3000"
     depends_on:
       db:
         condition: service_healthy
