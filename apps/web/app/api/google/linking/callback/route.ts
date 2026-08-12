@@ -1,13 +1,23 @@
-import { NextResponse } from "next/server";
 import { env } from "@/env";
+import { auth } from "@/utils/auth";
+import { hash } from "@/utils/hash";
 import prisma from "@/utils/prisma";
 import { getLinkingOAuth2Client } from "@/utils/gmail/client";
 import { GOOGLE_LINKING_STATE_COOKIE_NAME } from "@/utils/gmail/constants";
 import { withError } from "@/utils/middleware";
 import { validateOAuthCallback } from "@/utils/oauth/callback-validation";
+import { createAccountLinkingRedirect } from "@/utils/oauth/account-linking-redirect";
+import {
+  hashOAuthAuditIdentifier,
+  logOAuthLinkingCallbackValidation,
+} from "@/utils/oauth/linking-audit";
 import { handleAccountLinking } from "@/utils/oauth/account-linking";
 import { mergeAccount } from "@/utils/user/merge-account";
 import { handleOAuthCallbackError } from "@/utils/oauth/error-handler";
+import {
+  fetchGoogleOpenIdProfile,
+  isGoogleOauthEmulationEnabled,
+} from "@/utils/google/oauth";
 import {
   acquireOAuthCodeLock,
   getOAuthCodeResult,
@@ -15,9 +25,16 @@ import {
   clearOAuthCode,
 } from "@/utils/redis/oauth-code";
 import { isDuplicateError } from "@/utils/prisma-helpers";
+import { SafeError } from "@/utils/error";
 
 export const GET = withError("google/linking/callback", async (request) => {
-  const logger = request.logger;
+  const actorUserId = (await auth(request.headers))?.user.id ?? null;
+  let logger = request.logger.with({
+    actorUserId,
+    auditType: "oauth_linking",
+    hasActorSession: !!actorUserId,
+    provider: "google",
+  });
 
   const searchParams = request.nextUrl.searchParams;
   const storedState = request.cookies.get(
@@ -36,20 +53,31 @@ export const GET = withError("google/linking/callback", async (request) => {
     return validation.response;
   }
 
-  const { targetUserId, code } = validation;
+  const { targetUserId, code, stateNonce } = validation;
+  logger = logOAuthLinkingCallbackValidation({
+    actorUserId,
+    logger,
+    provider: "google",
+    stateNonce,
+    targetUserId,
+  });
+
+  if (actorUserId && actorUserId !== targetUserId) {
+    return createAccountLinkingRedirect({
+      query: { error: "invalid_state" },
+      stateCookieName: GOOGLE_LINKING_STATE_COOKIE_NAME,
+    });
+  }
 
   const cachedResult = await getOAuthCodeResult(code);
   if (cachedResult) {
     logger.info("OAuth code already processed, returning cached result", {
       targetUserId,
     });
-    const redirectUrl = new URL("/accounts", env.NEXT_PUBLIC_BASE_URL);
-    for (const [key, value] of Object.entries(cachedResult.params)) {
-      redirectUrl.searchParams.set(key, value);
-    }
-    const response = NextResponse.redirect(redirectUrl);
-    response.cookies.delete(GOOGLE_LINKING_STATE_COOKIE_NAME);
-    return response;
+    return createAccountLinkingRedirect({
+      query: cachedResult.params,
+      stateCookieName: GOOGLE_LINKING_STATE_COOKIE_NAME,
+    });
   }
 
   const acquiredLock = await acquireOAuthCodeLock(code);
@@ -57,51 +85,26 @@ export const GET = withError("google/linking/callback", async (request) => {
     logger.info("OAuth code is being processed by another request", {
       targetUserId,
     });
-    const redirectUrl = new URL("/accounts", env.NEXT_PUBLIC_BASE_URL);
-    const response = NextResponse.redirect(redirectUrl);
-    response.cookies.delete(GOOGLE_LINKING_STATE_COOKIE_NAME);
-    return response;
+    return createAccountLinkingRedirect({
+      stateCookieName: GOOGLE_LINKING_STATE_COOKIE_NAME,
+    });
   }
 
   const googleAuth = getLinkingOAuth2Client();
 
   try {
     const { tokens } = await googleAuth.getToken(code);
-    const { id_token } = tokens;
-
-    if (!id_token) {
-      throw new Error("Missing id_token from Google response");
-    }
-
-    let payload: {
-      sub?: string;
-      email?: string;
-      name?: string;
-      picture?: string;
-    };
-    try {
-      const ticket = await googleAuth.verifyIdToken({
-        idToken: id_token,
-        audience: env.GOOGLE_CLIENT_ID,
-      });
-      const verifiedPayload = ticket.getPayload();
-      if (!verifiedPayload) {
-        throw new Error("Could not get payload from verified ID token ticket.");
-      }
-      payload = verifiedPayload;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      logger.error("ID token verification failed using googleAuth:", {
-        error: err,
-      });
-      throw new Error(`ID token verification failed: ${message}`);
-    }
+    const payload = await getGoogleProfilePayload({
+      googleAuth,
+      tokens,
+      logger,
+    });
 
     const providerAccountId = payload.sub;
     const providerEmail = payload.email;
 
     if (!providerAccountId || !providerEmail) {
-      throw new Error(
+      throw new SafeError(
         "ID token missing required subject (sub) or email claim.",
       );
     }
@@ -133,7 +136,75 @@ export const GET = withError("google/linking/callback", async (request) => {
       return linkingResult.response;
     }
 
+    if (linkingResult.type === "update_existing_account") {
+      assertVerifiedGoogleEmail(payload);
+
+      logger.info(
+        "Updating existing Google account with new providerAccountId",
+        {
+          email: providerEmail,
+          targetUserId,
+          accountId: linkingResult.existingAccountId,
+        },
+      );
+
+      await updateGoogleAccount({
+        accountId: linkingResult.existingAccountId,
+        providerAccountId,
+        tokens,
+      });
+
+      logger.info("OAuth linking callback completed", {
+        accountId: linkingResult.existingAccountId,
+        outcome: "tokens_updated",
+        providerEmailHash: hash(providerEmail),
+        providerSubjectHash: hashOAuthAuditIdentifier(providerAccountId),
+      });
+
+      await setOAuthCodeResult(code, { success: "tokens_updated" });
+      return createAccountLinkingRedirect({
+        query: { success: "tokens_updated" },
+        stateCookieName: GOOGLE_LINKING_STATE_COOKIE_NAME,
+      });
+    }
+
     if (linkingResult.type === "continue_create") {
+      if (isGoogleOauthEmulationEnabled()) {
+        const existingEmulatedAccount = await prisma.emailAccount.findFirst({
+          where: {
+            email: providerEmail.trim().toLowerCase(),
+            userId: targetUserId,
+            account: {
+              provider: "google",
+            },
+          },
+          select: { accountId: true },
+        });
+
+        if (existingEmulatedAccount) {
+          assertVerifiedGoogleEmail(payload);
+
+          logger.info(
+            "Updating existing Google emulator account for same user and email",
+            {
+              accountId: existingEmulatedAccount.accountId,
+            },
+          );
+
+          await updateGoogleAccount({
+            accountId: existingEmulatedAccount.accountId,
+            providerAccountId,
+            tokens,
+          });
+
+          await setOAuthCodeResult(code, { success: "tokens_updated" });
+          return createAccountLinkingRedirect({
+            query: { success: "tokens_updated" },
+            stateCookieName: GOOGLE_LINKING_STATE_COOKIE_NAME,
+          });
+        }
+      }
+
       logger.info("Creating new Google account and linking to current user", {
         email: providerEmail,
         targetUserId,
@@ -170,6 +241,12 @@ export const GET = withError("google/linking/callback", async (request) => {
           targetUserId,
           accountId: newAccount.id,
         });
+        logger.info("OAuth linking callback completed", {
+          accountId: newAccount.id,
+          outcome: "account_created_and_linked",
+          providerEmailHash: hash(providerEmail),
+          providerSubjectHash: hashOAuthAuditIdentifier(providerAccountId),
+        });
       } catch (createError: unknown) {
         if (isDuplicateError(createError)) {
           const accountNow = await prisma.account.findUnique({
@@ -179,17 +256,30 @@ export const GET = withError("google/linking/callback", async (request) => {
                 providerAccountId,
               },
             },
-            select: { userId: true },
+            select: { id: true, userId: true },
           });
 
           if (accountNow?.userId === targetUserId) {
             logger.info(
-              "Account was created by concurrent request, continuing",
+              "Account already exists for same user, updating tokens",
               {
                 targetUserId,
                 providerAccountId,
+                accountId: accountNow.id,
               },
             );
+
+            await updateGoogleAccount({
+              accountId: accountNow.id,
+              tokens,
+            });
+
+            logger.info("OAuth linking callback completed", {
+              accountId: accountNow.id,
+              outcome: "tokens_updated",
+              providerEmailHash: hash(providerEmail),
+              providerSubjectHash: hashOAuthAuditIdentifier(providerAccountId),
+            });
           } else {
             throw createError;
           }
@@ -199,13 +289,41 @@ export const GET = withError("google/linking/callback", async (request) => {
       }
 
       await setOAuthCodeResult(code, { success: "account_created_and_linked" });
+      return createAccountLinkingRedirect({
+        query: { success: "account_created_and_linked" },
+        stateCookieName: GOOGLE_LINKING_STATE_COOKIE_NAME,
+      });
+    }
 
-      const successUrl = new URL("/accounts", env.NEXT_PUBLIC_BASE_URL);
-      successUrl.searchParams.set("success", "account_created_and_linked");
-      const successResponse = NextResponse.redirect(successUrl);
-      successResponse.cookies.delete(GOOGLE_LINKING_STATE_COOKIE_NAME);
+    if (linkingResult.type === "update_tokens") {
+      logger.info("Updating tokens for existing Google account", {
+        email: providerEmail,
+        targetUserId,
+        accountId: linkingResult.existingAccountId,
+      });
 
-      return successResponse;
+      await updateGoogleAccount({
+        accountId: linkingResult.existingAccountId,
+        tokens,
+      });
+
+      logger.info("Successfully updated tokens for Google account", {
+        email: providerEmail,
+        targetUserId,
+        accountId: linkingResult.existingAccountId,
+      });
+      logger.info("OAuth linking callback completed", {
+        accountId: linkingResult.existingAccountId,
+        outcome: "tokens_updated",
+        providerEmailHash: hash(providerEmail),
+        providerSubjectHash: hashOAuthAuditIdentifier(providerAccountId),
+      });
+
+      await setOAuthCodeResult(code, { success: "tokens_updated" });
+      return createAccountLinkingRedirect({
+        query: { success: "tokens_updated" },
+        stateCookieName: GOOGLE_LINKING_STATE_COOKIE_NAME,
+      });
     }
 
     logger.info("Merging Google account (user confirmed).", {
@@ -215,6 +333,8 @@ export const GET = withError("google/linking/callback", async (request) => {
       targetUserId,
     });
 
+    assertVerifiedGoogleEmail(payload);
+
     const mergeType = await mergeAccount({
       sourceAccountId: linkingResult.sourceAccountId,
       sourceUserId: linkingResult.sourceUserId,
@@ -222,6 +342,12 @@ export const GET = withError("google/linking/callback", async (request) => {
       email: providerEmail,
       name: existingAccount?.user.name || null,
       logger,
+    });
+
+    await updateGoogleAccount({
+      accountId: linkingResult.sourceAccountId,
+      providerAccountId,
+      tokens,
     });
 
     const successMessage =
@@ -235,24 +361,109 @@ export const GET = withError("google/linking/callback", async (request) => {
       originalUserId: linkingResult.sourceUserId,
       mergeType,
     });
+    logger.info("OAuth linking callback completed", {
+      outcome: successMessage,
+      providerEmailHash: hash(providerEmail),
+      providerSubjectHash: hashOAuthAuditIdentifier(providerAccountId),
+      sourceUserId: linkingResult.sourceUserId,
+    });
 
     await setOAuthCodeResult(code, { success: successMessage });
-
-    const successUrl = new URL("/accounts", env.NEXT_PUBLIC_BASE_URL);
-    successUrl.searchParams.set("success", successMessage);
-    const successResponse = NextResponse.redirect(successUrl);
-    successResponse.cookies.delete(GOOGLE_LINKING_STATE_COOKIE_NAME);
-
-    return successResponse;
+    return createAccountLinkingRedirect({
+      query: { success: successMessage },
+      stateCookieName: GOOGLE_LINKING_STATE_COOKIE_NAME,
+    });
   } catch (error) {
     await clearOAuthCode(code);
-
-    const errorUrl = new URL("/accounts", env.NEXT_PUBLIC_BASE_URL);
     return handleOAuthCallbackError({
       error,
-      redirectUrl: errorUrl,
       stateCookieName: GOOGLE_LINKING_STATE_COOKIE_NAME,
       logger,
     });
   }
 });
+
+interface GoogleTokens {
+  access_token?: string | null;
+  expiry_date?: number | null;
+  id_token?: string | null;
+  refresh_token?: string | null;
+  scope?: string | null;
+  token_type?: string | null;
+}
+
+async function updateGoogleAccount({
+  accountId,
+  providerAccountId,
+  tokens,
+}: {
+  accountId: string;
+  providerAccountId?: string;
+  tokens: GoogleTokens;
+}) {
+  await prisma.account.update({
+    where: { id: accountId },
+    data: {
+      ...(providerAccountId && {
+        providerAccountId,
+      }),
+      access_token: tokens.access_token,
+      ...(tokens.refresh_token != null && {
+        refresh_token: tokens.refresh_token,
+      }),
+      expires_at: tokens.expiry_date ? new Date(tokens.expiry_date) : null,
+      scope: tokens.scope,
+      token_type: tokens.token_type,
+      id_token: tokens.id_token,
+    },
+  });
+}
+
+function assertVerifiedGoogleEmail(payload: { email_verified?: boolean }) {
+  if (payload.email_verified !== true) {
+    throw new SafeError("Google email claim is not verified.");
+  }
+}
+
+async function getGoogleProfilePayload({
+  googleAuth,
+  tokens,
+  logger,
+}: {
+  googleAuth: ReturnType<typeof getLinkingOAuth2Client>;
+  tokens: GoogleTokens;
+  logger: Parameters<typeof handleOAuthCallbackError>[0]["logger"];
+}) {
+  if (isGoogleOauthEmulationEnabled()) {
+    if (!tokens.access_token) {
+      throw new SafeError("Missing access_token from Google response");
+    }
+
+    return fetchGoogleOpenIdProfile(tokens.access_token);
+  }
+
+  if (!tokens.id_token) {
+    throw new SafeError("Missing id_token from Google response");
+  }
+
+  try {
+    const ticket = await googleAuth.verifyIdToken({
+      idToken: tokens.id_token,
+      audience: env.GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    if (!payload) {
+      throw new SafeError(
+        "Could not get payload from verified ID token ticket.",
+      );
+    }
+
+    return payload;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    logger.error("ID token verification failed using googleAuth:", {
+      error,
+    });
+    throw new SafeError(`ID token verification failed: ${message}`);
+  }
+}

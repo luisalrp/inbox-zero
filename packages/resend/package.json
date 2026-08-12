@@ -5,21 +5,24 @@
   "scripts": {
     "dev": "email dev --port 3010"
   },
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "dependencies": {
-    "@react-email/components": "0.5.7",
-    "@react-email/render": "1.4.0",
-    "nanoid": "5.1.6",
-    "react": "19.2.0",
-    "react-dom": "19.2.0",
-    "react-email": "4.3.1",
-    "resend": "6.2.1"
+    "@react-email/components": "1.0.12",
+    "@react-email/render": "2.1.0",
+    "nanoid": "6.0.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-email": "6.9.1",
+    "resend": "6.18.1"
   },
   "devDependencies": {
-    "@types/node": "24.9.1",
-    "@types/react": "19.2.2",
-    "@types/react-dom": "19.2.2",
-    "prettier": "3.6.2",
+    "@react-email/preview-server": "5.2.10",
+    "@types/node": "24.10.1",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
     "tsconfig": "workspace:*",
-    "typescript": "5.9.3"
+    "typescript": "6.0.3"
   }
 }

@@ -1,5 +1,35 @@
+import he from "he";
+
+export function escapeHtml(text: string | null | undefined): string {
+  if (!text) return "";
+  return he.escape(text);
+}
+
+// Blank lines separate paragraphs, single newlines become line breaks. Escaped
+// because the text is usually model- or user-written and ends up in sent HTML.
+export function textToHtmlParagraphs(text?: string | null): string {
+  if (!text) return "";
+
+  return text
+    .replace(/\r\n/g, "\n")
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter((paragraph) => paragraph !== "")
+    .map(
+      (paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br />")}</p>`,
+    )
+    .join("");
+}
+
 export function truncate(str: string, length: number) {
   return str.length > length ? `${str.slice(0, length)}...` : str;
+}
+
+export function trimToNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") return;
+
+  const trimmedValue = value.trim();
+  return trimmedValue.length > 0 ? trimmedValue : undefined;
 }
 
 export function removeExcessiveWhitespace(str: string) {
@@ -56,4 +86,8 @@ export function slugify(text: string): string {
     .replace(/[^\p{L}\p{N}\s_-]/gu, "")
     .replace(/[\s_-]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+export function convertNewlinesToBr(text: string): string {
+  return text.replace(/\r\n/g, "\n").replace(/\n/g, "<br>");
 }

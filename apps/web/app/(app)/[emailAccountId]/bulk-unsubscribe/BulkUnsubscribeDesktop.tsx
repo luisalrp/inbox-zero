@@ -14,62 +14,70 @@ import {
   HeaderButton,
 } from "@/app/(app)/[emailAccountId]/bulk-unsubscribe/common";
 import type { RowProps } from "@/app/(app)/[emailAccountId]/bulk-unsubscribe/types";
-import { Checkbox } from "@/components/Checkbox";
+import { ButtonCheckbox } from "@/components/ButtonCheckbox";
+import { DomainIcon } from "@/components/charts/DomainIcon";
 import { Progress } from "@/components/ui/progress";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { extractDomainFromEmail } from "@/utils/email";
+import { cn } from "@/utils";
+import { isUnsubscribeSuggestion } from "@/app/(app)/[emailAccountId]/bulk-unsubscribe/suggestions";
 
 export function BulkUnsubscribeDesktop({
   tableRows,
   sortColumn,
-  setSortColumn,
+  sortDirection,
+  onSort,
   isAllSelected,
+  isSomeSelected,
   onToggleSelectAll,
 }: {
   tableRows?: React.ReactNode;
   sortColumn: "emails" | "unread" | "unarchived";
-  setSortColumn: (sortColumn: "emails" | "unread" | "unarchived") => void;
+  sortDirection: "asc" | "desc";
+  onSort: (column: "emails" | "unread" | "unarchived") => void;
   isAllSelected: boolean;
+  isSomeSelected: boolean;
   onToggleSelectAll: () => void;
 }) {
   return (
-    <Table>
+    <Table className="bulk-unsub-table">
       <TableHeader>
         <TableRow>
-          <TableHead className="pr-0">
-            <Checkbox checked={isAllSelected} onChange={onToggleSelectAll} />
+          <TableHead className="w-10 pr-0">
+            <ButtonCheckbox
+              label={
+                isAllSelected ? "Deselect all senders" : "Select all senders"
+              }
+              checked={isAllSelected}
+              indeterminate={isSomeSelected && !isAllSelected}
+              onChange={() => onToggleSelectAll()}
+            />
           </TableHead>
-          <TableHead>
+          <TableHead className="pl-8">
             <span className="text-sm font-medium">From</span>
           </TableHead>
-          <TableHead>
+          <TableHead className="whitespace-nowrap">
             <HeaderButton
               sorted={sortColumn === "emails"}
-              onClick={() => setSortColumn("emails")}
+              sortDirection={
+                sortColumn === "emails" ? sortDirection : undefined
+              }
+              onClick={() => onSort("emails")}
             >
               Emails
             </HeaderButton>
           </TableHead>
-          <TableHead>
+          <TableHead className="whitespace-nowrap">
             <HeaderButton
               sorted={sortColumn === "unread"}
-              onClick={() => setSortColumn("unread")}
+              sortDirection={
+                sortColumn === "unread" ? sortDirection : undefined
+              }
+              onClick={() => onSort("unread")}
             >
               Read
             </HeaderButton>
           </TableHead>
-          <TableHead>
-            <HeaderButton
-              sorted={sortColumn === "unarchived"}
-              onClick={() => setSortColumn("unarchived")}
-            >
-              Archived
-            </HeaderButton>
-          </TableHead>
-          <TableHead />
+          <TableHead className="w-[196px]" />
         </TableRow>
       </TableHeader>
       <TableBody>{tableRows}</TableBody>
@@ -92,70 +100,74 @@ export function BulkUnsubscribeRowDesktop({
   emailAccountId,
   onToggleSelect,
   checked,
+  filter,
   readPercentage,
-  archivedEmails,
-  archivedPercentage,
 }: RowProps) {
+  const domain = extractDomainFromEmail(item.name) || item.name;
+  const isSuggested = isUnsubscribeSuggestion(item);
+
   return (
     <TableRow
       key={item.name}
-      className={selected ? "bg-blue-50 dark:bg-muted/50" : undefined}
+      className="hover:bg-transparent dark:hover:bg-transparent"
       aria-selected={selected || undefined}
       data-selected={selected || undefined}
       onMouseEnter={onSelectRow}
       onDoubleClick={onDoubleClick}
     >
-      <TableCell className="pr-0">
-        <Checkbox
+      <TableCell className="w-10 pr-0" data-cell="checkbox">
+        <ButtonCheckbox
+          label={`Select ${item.fromName || item.name}`}
           checked={checked}
-          onChange={() => onToggleSelect?.(item.name)}
+          onChange={(shiftKey) => onToggleSelect?.(item.name, shiftKey)}
         />
       </TableCell>
-      <TableCell className="max-w-[250px] truncate min-[1550px]:max-w-[300px] py-3">
-        <div className="flex flex-col">
-          <span className="font-medium">{item.fromName || item.name}</span>
-          {item.fromName && (
-            <span className="text-xs text-muted-foreground">{item.name}</span>
-          )}
-        </div>
-      </TableCell>
-      <TableCell>{item.value}</TableCell>
-      <TableCell>
-        <div className="hidden xl:block">
-          <div className="flex items-center gap-4">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Progress value={readPercentage} className="h-2 w-[150px]" />
-              </TooltipTrigger>
-              <TooltipContent>
-                {item.readEmails} read. {item.value - item.readEmails} unread.
-              </TooltipContent>
-            </Tooltip>
-            <span className="text-sm">{Math.round(readPercentage)}%</span>
+      <TableCell
+        className="max-w-[200px] min-w-0 py-3 pl-8 lg:max-w-[350px]"
+        data-cell="from"
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <DomainIcon domain={domain} size={32} variant="circular" />
+          <div className="min-w-0 lg:flex lg:items-baseline lg:gap-2">
+            <div className="truncate font-medium">
+              {item.fromName || item.name}
+            </div>
+            {item.fromName && (
+              <div className="truncate text-xs text-muted-foreground lg:text-sm">
+                {item.name}
+              </div>
+            )}
           </div>
         </div>
-        <div className="xl:hidden">{Math.round(readPercentage)}%</div>
       </TableCell>
-      <TableCell>
-        <div className="hidden 2xl:block">
-          <div className="flex items-center gap-4">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Progress
-                  value={archivedPercentage}
-                  className="h-2 w-[150px]"
-                />
-              </TooltipTrigger>
-              <TooltipContent>
-                {archivedEmails} archived. {item.inboxEmails} unarchived.
-              </TooltipContent>
-            </Tooltip>
-            <span className="text-sm">{Math.round(archivedPercentage)}%</span>
-          </div>
+      <TableCell className="whitespace-nowrap" data-label="Emails">
+        <span className="font-medium text-foreground/80">{item.value}</span>
+      </TableCell>
+      <TableCell className="whitespace-nowrap" data-label="Read">
+        <div className="flex items-center gap-2">
+          <Progress
+            value={readPercentage}
+            className={cn(
+              "h-1.5 w-16",
+              isSuggested ? "bg-amber-100 dark:bg-amber-950" : "bg-muted",
+            )}
+            innerClassName={
+              isSuggested ? "bg-amber-400" : "bg-slate-300 dark:bg-slate-500"
+            }
+          />
+          <span
+            className={cn(
+              "font-medium",
+              isSuggested
+                ? "text-amber-600 dark:text-amber-400"
+                : "text-foreground/80",
+            )}
+          >
+            {Math.round(readPercentage)}%
+          </span>
         </div>
-        <div className="2xl:hidden">{Math.round(archivedPercentage)}%</div>
       </TableCell>
-      <TableCell className="p-1">
+      <TableCell className="w-auto sm:w-[196px] p-1" data-cell="actions">
         <div className="flex justify-end items-center gap-2">
           <ActionCell
             item={item}
@@ -168,6 +180,7 @@ export function BulkUnsubscribeRowDesktop({
             openPremiumModal={openPremiumModal}
             userEmail={userEmail}
             emailAccountId={emailAccountId}
+            filter={filter}
           />
         </div>
       </TableCell>

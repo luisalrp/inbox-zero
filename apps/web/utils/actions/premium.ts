@@ -1,25 +1,38 @@
 "use server";
 
+import { createHash } from "node:crypto";
+import type Stripe from "stripe";
 import { z } from "zod";
 import { after } from "next/server";
+import { cookies } from "next/headers";
 import uniq from "lodash/uniq";
-import sumBy from "lodash/sumBy";
 import prisma from "@/utils/prisma";
 import { env } from "@/env";
-import { isAdminForPremium, isOnHigherTier, isPremium } from "@/utils/premium";
 import {
-  cancelPremiumLemon,
-  updateAccountSeatsForPremium,
+  getUserTier,
+  isAdminForPremium,
+  isOnHigherTier,
+  isPremiumRecord,
+  getUnsubscribePeriod,
+  premiumEntitlementSelect,
+} from "@/utils/premium";
+import {
+  grantPremiumAdmin,
   upgradeToPremiumLemon,
 } from "@/utils/premium/server";
-import { changePremiumStatusSchema } from "@/app/(app)/admin/validation";
 import {
-  activateLemonLicenseKey,
-  getLemonCustomer,
-} from "@/ee/billing/lemon/index";
+  getStripeBillingQuantity,
+  syncPremiumSeats,
+} from "@/utils/premium/seats";
+import { changePremiumStatusSchema } from "@/app/(app)/admin/validation";
+import { activateLemonLicenseKey } from "@/ee/billing/lemon/index";
 import { PremiumTier } from "@/generated/prisma/enums";
 import { ONE_MONTH_MS, ONE_YEAR_MS } from "@/utils/date";
-import { getStripePriceId } from "@/app/(app)/premium/config";
+import {
+  BRIEF_MY_MEETING_PRICE_ID_ANNUALLY,
+  BRIEF_MY_MEETING_PRICE_ID_MONTHLY,
+  getStripePriceId,
+} from "@/app/(app)/premium/config";
 import {
   actionClientUser,
   adminActionClient,
@@ -32,8 +45,14 @@ import {
   trackStripeCheckoutCreated,
   trackStripeCustomerCreated,
 } from "@/utils/posthog";
+import {
+  CONVERSION_ATTRIBUTION_COOKIE,
+  CONVERSION_ATTRIBUTION_METADATA_KEY,
+  getConversionClickMetadata,
+} from "@/utils/analytics/server-conversion-events";
 
 const TEN_YEARS = 10 * 365 * 24 * 60 * 60 * 1000;
+const checkoutOfferSchema = z.enum(["BRIEF_MY_MEETING"]);
 
 export const decrementUnsubscribeCreditAction = actionClientUser
   .metadata({ name: "decrementUnsubscribeCredit" })
@@ -46,8 +65,7 @@ export const decrementUnsubscribeCreditAction = actionClientUser
             id: true,
             unsubscribeCredits: true,
             unsubscribeMonth: true,
-            lemonSqueezyRenewsAt: true,
-            stripeSubscriptionStatus: true,
+            ...premiumEntitlementSelect,
           },
         },
       },
@@ -55,40 +73,39 @@ export const decrementUnsubscribeCreditAction = actionClientUser
 
     if (!user) throw new SafeError("User not found");
 
-    const isUserPremium = isPremium(
-      user.premium?.lemonSqueezyRenewsAt || null,
-      user.premium?.stripeSubscriptionStatus || null,
-    );
+    const isUserPremium = isPremiumRecord(user.premium);
     if (isUserPremium) return;
 
-    const currentMonth = new Date().getMonth() + 1;
+    const currentPeriod = getUnsubscribePeriod();
 
     // create premium row for user if it doesn't already exist
     const premium = user.premium || (await createPremiumForUser({ userId }));
 
-    if (
-      !premium?.unsubscribeMonth ||
-      premium?.unsubscribeMonth !== currentMonth
-    ) {
-      // reset the monthly credits
-      await prisma.premium.update({
-        where: { id: premium.id },
-        data: {
-          // reset and use a credit
-          unsubscribeCredits: env.NEXT_PUBLIC_FREE_UNSUBSCRIBE_CREDITS - 1,
-          unsubscribeMonth: currentMonth,
-        },
-      });
-    } else {
-      if (!premium?.unsubscribeCredits || premium.unsubscribeCredits <= 0)
-        return;
+    const resetResult = await prisma.premium.updateMany({
+      where: {
+        id: premium.id,
+        OR: [
+          { unsubscribeMonth: null },
+          { unsubscribeMonth: { not: currentPeriod } },
+        ],
+      },
+      data: {
+        // reset and use a credit
+        unsubscribeCredits: env.NEXT_PUBLIC_FREE_UNSUBSCRIBE_CREDITS - 1,
+        unsubscribeMonth: currentPeriod,
+      },
+    });
 
-      // decrement the monthly credits
-      await prisma.premium.update({
-        where: { id: premium.id },
-        data: { unsubscribeCredits: { decrement: 1 } },
-      });
-    }
+    if (resetResult.count > 0) return;
+
+    await prisma.premium.updateMany({
+      where: {
+        id: premium.id,
+        unsubscribeMonth: currentPeriod,
+        unsubscribeCredits: { gt: 0 },
+      },
+      data: { unsubscribeCredits: { decrement: 1 } },
+    });
   });
 
 export const updateMultiAccountPremiumAction = actionClientUser
@@ -101,7 +118,7 @@ export const updateMultiAccountPremiumAction = actionClientUser
         premium: {
           select: {
             id: true,
-            tier: true,
+            ...premiumEntitlementSelect,
             lemonSqueezySubscriptionItemId: true,
             stripeSubscriptionItemId: true,
             emailAccountsAccess: true,
@@ -132,7 +149,9 @@ export const updateMultiAccountPremiumAction = actionClientUser
 
     // make sure that the users being added to this plan are not on higher tiers already
     for (const userToAdd of otherUsers) {
-      if (isOnHigherTier(userToAdd.premium?.tier, premium.tier)) {
+      if (
+        isOnHigherTier(getUserTier(userToAdd.premium), getUserTier(premium))
+      ) {
         throw new SafeError(
           "One of the users you are adding to your plan already has premium and cannot be added.",
         );
@@ -192,38 +211,16 @@ export const updateMultiAccountPremiumAction = actionClientUser
       (email) =>
         !users.some((u) => u.email === email) && !userEmailAccounts.has(email),
     );
-    const updatedPremium = await prisma.premium.update({
+    await prisma.premium.update({
       where: { id: premium.id },
       data: {
         pendingInvites: {
           set: nonExistingUsers,
         },
       },
-      select: {
-        users: {
-          select: {
-            email: true,
-            _count: { select: { emailAccounts: true } },
-          },
-        },
-        pendingInvites: true,
-      },
     });
 
-    const connectedUserEmails = new Set(
-      updatedPremium.users.map((u) => u.email),
-    );
-
-    const uniquePendingInvites = (updatedPremium.pendingInvites || []).filter(
-      (email) => !connectedUserEmails.has(email),
-    );
-
-    // total seats = premium users + unique pending invites
-    const totalSeats =
-      sumBy(updatedPremium.users, (u) => u._count.emailAccounts) +
-      uniquePendingInvites.length;
-
-    await updateAccountSeatsForPremium(premium, totalSeats);
+    await syncPremiumSeats(premium.id);
   });
 
 // export const switchLemonPremiumPlanAction = actionClientUser
@@ -251,10 +248,11 @@ export const updateMultiAccountPremiumAction = actionClientUser
 export const activateLicenseKeyAction = actionClientUser
   .metadata({ name: "activateLicenseKey" })
   .inputSchema(activateLicenseKeySchema)
-  .action(async ({ ctx: { userId }, parsedInput: { licenseKey } }) => {
+  .action(async ({ ctx: { userId, logger }, parsedInput: { licenseKey } }) => {
     const lemonSqueezyLicense = await activateLemonLicenseKey(
       licenseKey,
       `License for ${userId}`,
+      logger,
     );
 
     if (lemonSqueezyLicense.error) {
@@ -294,14 +292,7 @@ export const adminChangePremiumStatusAction = adminActionClient
   .inputSchema(changePremiumStatusSchema)
   .action(
     async ({
-      parsedInput: {
-        email,
-        period,
-        count,
-        emailAccountsAccess,
-        lemonSqueezyCustomerId,
-        upgrade,
-      },
+      parsedInput: { email, period, count, emailAccountsAccess, upgrade },
     }) => {
       const userToUpgrade = await prisma.emailAccount.findUnique({
         where: { email },
@@ -313,45 +304,21 @@ export const adminChangePremiumStatusAction = adminActionClient
 
       if (!userToUpgrade?.user) throw new SafeError("User not found");
 
-      let lemonSqueezySubscriptionId: number | null = null;
-      let lemonSqueezySubscriptionItemId: number | null = null;
-      let lemonSqueezyOrderId: number | null = null;
-      let lemonSqueezyProductId: number | null = null;
-      let lemonSqueezyVariantId: number | null = null;
-
       if (upgrade) {
-        if (lemonSqueezyCustomerId) {
-          const lemonCustomer = await getLemonCustomer(
-            lemonSqueezyCustomerId.toString(),
-          );
-          if (!lemonCustomer.data)
-            throw new SafeError("Lemon customer not found");
-          const subscription = lemonCustomer.data.included?.find(
-            (i) => i.type === "subscriptions",
-          );
-          if (!subscription) throw new SafeError("Subscription not found");
-          lemonSqueezySubscriptionId = Number.parseInt(subscription.id);
-          const attributes = subscription.attributes as any;
-          lemonSqueezyOrderId = Number.parseInt(attributes.order_id);
-          lemonSqueezyProductId = Number.parseInt(attributes.product_id);
-          lemonSqueezyVariantId = Number.parseInt(attributes.variant_id);
-          lemonSqueezySubscriptionItemId = attributes.first_subscription_item.id
-            ? Number.parseInt(attributes.first_subscription_item.id)
-            : null;
-        }
-
-        const getRenewsAt = (period: PremiumTier): Date | null => {
+        const getGrantExpiresAt = (period: PremiumTier): Date | null => {
           const now = new Date();
           switch (period) {
             case PremiumTier.BASIC_ANNUALLY:
             case PremiumTier.PRO_ANNUALLY:
-            case PremiumTier.BUSINESS_ANNUALLY:
-            case PremiumTier.BUSINESS_PLUS_ANNUALLY:
+            case PremiumTier.STARTER_ANNUALLY:
+            case PremiumTier.PLUS_ANNUALLY:
+            case PremiumTier.PROFESSIONAL_ANNUALLY:
               return new Date(now.getTime() + ONE_YEAR_MS * (count || 1));
             case PremiumTier.BASIC_MONTHLY:
             case PremiumTier.PRO_MONTHLY:
-            case PremiumTier.BUSINESS_MONTHLY:
-            case PremiumTier.BUSINESS_PLUS_MONTHLY:
+            case PremiumTier.STARTER_MONTHLY:
+            case PremiumTier.PLUS_MONTHLY:
+            case PremiumTier.PROFESSIONAL_MONTHLY:
             case PremiumTier.COPILOT_MONTHLY:
               return new Date(now.getTime() + ONE_MONTH_MS * (count || 1));
             case PremiumTier.LIFETIME:
@@ -361,22 +328,20 @@ export const adminChangePremiumStatusAction = adminActionClient
           }
         };
 
-        await upgradeToPremiumLemon({
+        await grantPremiumAdmin({
           userId: userToUpgrade.user.id,
           tier: period,
-          lemonSqueezyCustomerId: lemonSqueezyCustomerId || null,
-          lemonSqueezySubscriptionId,
-          lemonSqueezySubscriptionItemId,
-          lemonSqueezyOrderId,
-          lemonSqueezyProductId,
-          lemonSqueezyVariantId,
-          lemonSqueezyRenewsAt: getRenewsAt(period),
+          adminGrantExpiresAt: getGrantExpiresAt(period),
           emailAccountsAccess,
         });
       } else if (userToUpgrade.user.premiumId) {
-        await cancelPremiumLemon({
-          premiumId: userToUpgrade.user.premiumId,
-          lemonSqueezyEndsAt: new Date(),
+        await prisma.premium.update({
+          where: { id: userToUpgrade.user.premiumId },
+          data: {
+            tier: null,
+            adminGrantExpiresAt: null,
+            adminGrantTier: null,
+          },
         });
       } else {
         throw new SafeError("User not premium.");
@@ -402,32 +367,78 @@ export const claimPremiumAdminAction = actionClientUser
     });
   });
 
-export const getBillingPortalUrlAction = actionClientUser
-  .metadata({ name: "getBillingPortalUrl" })
-  .inputSchema(z.object({ tier: z.nativeEnum(PremiumTier).optional() }))
-  .action(async ({ ctx: { userId, logger }, parsedInput: { tier } }) => {
-    const priceId = tier ? getStripePriceId({ tier }) : undefined;
-
-    const stripe = getStripe();
-
+export const updateStripeInvoiceEmailsAction = actionClientUser
+  .metadata({ name: "updateStripeInvoiceEmails" })
+  .inputSchema(z.object({ enabled: z.boolean() }))
+  .action(async ({ ctx: { userId }, parsedInput: { enabled } }) => {
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: {
         premium: {
           select: {
+            id: true,
             stripeCustomerId: true,
-            stripeSubscriptionId: true,
-            stripeSubscriptionItemId: true,
-            stripeSubscriptionStatus: true,
+            admins: { select: { id: true } },
           },
         },
       },
     });
 
     if (!user?.premium?.stripeCustomerId) {
+      throw new SafeError("Stripe billing account not found");
+    }
+    if (!isAdminForPremium(user.premium.admins, userId)) {
+      throw new SafeError("Not admin");
+    }
+
+    await prisma.premium.update({
+      where: { id: user.premium.id },
+      data: { stripeInvoiceEmailsEnabled: enabled },
+    });
+
+    return { enabled };
+  });
+
+export const getBillingPortalUrlAction = actionClientUser
+  .metadata({ name: "getBillingPortalUrl" })
+  .inputSchema(z.object({ tier: z.nativeEnum(PremiumTier).optional() }))
+  .action(async ({ ctx: { userId, logger }, parsedInput: { tier } }) => {
+    const priceId = tier ? getStripePriceId({ tier }) : undefined;
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        premium: {
+          select: {
+            admins: { select: { id: true } },
+            id: true,
+            stripeCustomerId: true,
+            stripeSubscriptionId: true,
+            stripeSubscriptionItemId: true,
+            stripeSubscriptionStatus: true,
+            users: {
+              select: { _count: { select: { emailAccounts: true } } },
+            },
+          },
+        },
+      },
+    });
+
+    if (!user) {
+      throw new SafeError("User not found");
+    }
+    if (!user.premium) {
+      throw new SafeError("Premium subscription not found");
+    }
+    if (!isPremiumBillingAdmin(user.premium, userId)) {
+      throw new SafeError("Not admin");
+    }
+    if (!user.premium.stripeCustomerId) {
       logger.error("Stripe customer id not found");
       throw new SafeError("Stripe customer id not found");
     }
+
+    const stripe = getStripe();
 
     const subscription =
       priceId &&
@@ -449,6 +460,11 @@ export const getBillingPortalUrlAction = actionClientUser
       return { url: null };
     }
 
+    const quantity = getStripeBillingQuantity({
+      priceId,
+      users: user.premium?.users || [],
+    });
+
     const { url } = await stripe.billingPortal.sessions.create({
       customer: user.premium.stripeCustomerId,
       return_url: `${env.NEXT_PUBLIC_BASE_URL}/premium`,
@@ -465,6 +481,7 @@ export const getBillingPortalUrlAction = actionClientUser
                   {
                     id: user.premium.stripeSubscriptionItemId,
                     price: priceId,
+                    quantity,
                   },
                 ],
               },
@@ -475,28 +492,82 @@ export const getBillingPortalUrlAction = actionClientUser
     return { url };
   });
 
-export const generateCheckoutSessionAction = actionClientUser
-  .metadata({ name: "generateCheckoutSession" })
-  .inputSchema(z.object({ tier: z.nativeEnum(PremiumTier) }))
-  .action(async ({ ctx: { userId, logger }, parsedInput: { tier } }) => {
-    const priceId = getStripePriceId({ tier });
+export const endStripeTrialAction = actionClientUser
+  .metadata({ name: "endStripeTrial" })
+  .action(async ({ ctx: { userId, logger } }) => {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        premium: {
+          select: {
+            admins: { select: { id: true } },
+            id: true,
+            stripeSubscriptionId: true,
+            stripeSubscriptionStatus: true,
+          },
+        },
+      },
+    });
 
-    if (!priceId) throw new SafeError("Unknown tier. Contact support.");
+    const premium = user?.premium;
+    if (!premium) {
+      throw new SafeError("Stripe subscription not found");
+    }
+    if (!isPremiumBillingAdmin(premium, userId)) {
+      throw new SafeError("Not admin");
+    }
+    if (!premium.stripeSubscriptionId) {
+      throw new SafeError("Stripe subscription not found");
+    }
+
+    if (premium.stripeSubscriptionStatus !== "trialing") {
+      throw new SafeError("Your trial has already ended");
+    }
 
     const stripe = getStripe();
+    const subscription = await stripe.subscriptions.update(
+      premium.stripeSubscriptionId,
+      {
+        trial_end: "now",
+      },
+    );
+
+    logger.info("Ended Stripe trial", {
+      subscriptionStatus: subscription.status,
+    });
+
+    return { status: subscription.status };
+  });
+
+export const generateCheckoutSessionAction = actionClientUser
+  .metadata({ name: "generateCheckoutSession" })
+  .inputSchema(
+    z.object({
+      tier: z.nativeEnum(PremiumTier),
+      offer: checkoutOfferSchema.optional(),
+    }),
+  )
+  .action(async ({ ctx: { userId, logger }, parsedInput: { tier, offer } }) => {
+    const priceId = getCheckoutPriceId({ tier, offer });
+
+    if (!priceId) throw new SafeError("Unknown tier. Contact support.");
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: {
         email: true,
+        utms: true,
+        _count: { select: { emailAccounts: true } },
         premium: {
           select: {
+            admins: { select: { id: true } },
             id: true,
             stripeCustomerId: true,
+            stripeSubscriptionId: true,
+            stripeSubscriptionStatus: true,
+            stripeEndedAt: true,
             users: {
-              select: {
-                _count: { select: { emailAccounts: true } },
-              },
+              select: { _count: { select: { emailAccounts: true } } },
             },
           },
         },
@@ -506,11 +577,23 @@ export const generateCheckoutSessionAction = actionClientUser
       logger.error("User not found");
       throw new SafeError("User not found");
     }
+    if (user.premium && !isPremiumBillingAdmin(user.premium, userId)) {
+      throw new SafeError("Not admin");
+    }
 
-    // Get the stripeCustomerId from your KV store
+    if (
+      user.premium?.stripeSubscriptionId &&
+      !user.premium.stripeEndedAt &&
+      user.premium.stripeSubscriptionStatus !== "incomplete_expired"
+    ) {
+      throw new SafeError(
+        "You already have an existing subscription. Change your plan instead of starting a new subscription.",
+      );
+    }
+
+    const stripe = getStripe();
     let stripeCustomerId = user.premium?.stripeCustomerId;
 
-    // Create a new Stripe customer if this user doesn't have one
     if (!stripeCustomerId) {
       const newCustomer = await stripe.customers.create(
         {
@@ -524,7 +607,6 @@ export const generateCheckoutSessionAction = actionClientUser
 
       after(() => trackStripeCustomerCreated(user.email, newCustomer.id));
 
-      // Store the relation between userId and stripeCustomerId
       const premium = user.premium || (await createPremiumForUser({ userId }));
 
       stripeCustomerId = newCustomer.id;
@@ -535,24 +617,88 @@ export const generateCheckoutSessionAction = actionClientUser
       });
     }
 
-    const quantity =
-      sumBy(user.premium?.users || [], (u) => u._count.emailAccounts) || 1;
+    const quantity = getStripeBillingQuantity({
+      priceId,
+      users: user.premium?.users || [{ _count: user._count }],
+    });
+    const cookieStore = await cookies();
+    const conversionAttributionId = cookieStore.get(
+      CONVERSION_ATTRIBUTION_COOKIE,
+    )?.value;
+    const conversionMetadata: Record<string, string> = {
+      ...(conversionAttributionId
+        ? { [CONVERSION_ATTRIBUTION_METADATA_KEY]: conversionAttributionId }
+        : {}),
+      ...getConversionClickMetadata({
+        utms: user.utms,
+        fbc: cookieStore.get("_fbc")?.value,
+        fbp: cookieStore.get("_fbp")?.value,
+      }),
+    };
 
-    // ALWAYS create a checkout with a stripeCustomerId
-    const checkout = await stripe.checkout.sessions.create({
+    const checkoutParams: Stripe.Checkout.SessionCreateParams = {
       customer: stripeCustomerId,
-      success_url: `${env.NEXT_PUBLIC_BASE_URL}/api/stripe/success`,
+      success_url: `${env.NEXT_PUBLIC_BASE_URL}/api/stripe/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${env.NEXT_PUBLIC_BASE_URL}/premium`,
       mode: "subscription",
-      subscription_data: { trial_period_days: 7 },
+      subscription_data: {
+        trial_period_days: 7,
+        ...(Object.keys(conversionMetadata).length
+          ? {
+              metadata: conversionMetadata,
+            }
+          : {}),
+      },
       line_items: [{ price: priceId, quantity }],
       allow_promotion_codes: true,
+      payment_method_collection: "always",
       metadata: {
         dubCustomerId: userId,
       },
+    };
+
+    // ALWAYS create a checkout with a stripeCustomerId
+    const checkout = await stripe.checkout.sessions.create(checkoutParams, {
+      idempotencyKey: `checkout:${createHash("sha256")
+        .update(JSON.stringify(checkoutParams))
+        .digest("hex")}`,
     });
 
-    after(() => trackStripeCheckoutCreated(user.email));
+    after(() =>
+      trackStripeCheckoutCreated(user.email, checkout.id, {
+        billingProvider: "stripe",
+        quantity,
+        tier,
+      }),
+    );
 
     return { url: checkout.url };
   });
+
+function getCheckoutPriceId({
+  tier,
+  offer,
+}: {
+  tier: PremiumTier;
+  offer?: z.infer<typeof checkoutOfferSchema>;
+}) {
+  if (offer === "BRIEF_MY_MEETING") {
+    if (tier === "STARTER_ANNUALLY") return BRIEF_MY_MEETING_PRICE_ID_ANNUALLY;
+    if (tier === "STARTER_MONTHLY") return BRIEF_MY_MEETING_PRICE_ID_MONTHLY;
+    return null;
+  }
+
+  return getStripePriceId({ tier });
+}
+
+function isPremiumBillingAdmin(
+  premium: { id: string; admins: { id: string }[] },
+  userId: string,
+) {
+  if (premium.admins.length) {
+    return isAdminForPremium(premium.admins, userId);
+  }
+
+  // The initial premium migration used the owner's user ID as the premium ID.
+  return premium.id === userId;
+}

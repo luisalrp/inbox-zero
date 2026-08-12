@@ -1,11 +1,12 @@
-import { experimental_createMCPClient } from "ai";
-import { getIntegration } from "@/utils/mcp/integrations";
+import { createMCPClient } from "@ai-sdk/mcp";
+import { findIntegration } from "@/utils/mcp/integrations";
 import prisma from "@/utils/prisma";
 import { createScopedLogger } from "@/utils/logger";
 import { getAuthToken } from "@/utils/mcp/oauth";
 import { createMcpTransport } from "@/utils/mcp/transport";
+import { getMcpServerUrl } from "@/utils/mcp/server-url";
 
-type MCPClient = Awaited<ReturnType<typeof experimental_createMCPClient>>;
+type MCPClient = Awaited<ReturnType<typeof createMCPClient>>;
 
 export type MCPToolsResult = {
   tools: Record<string, unknown>;
@@ -25,6 +26,7 @@ export async function createMcpToolsForAgent(
         tools: {
           some: {
             isEnabled: true,
+            isWrite: false,
           },
         },
       },
@@ -34,11 +36,10 @@ export async function createMcpToolsForAgent(
           select: {
             id: true,
             name: true,
-            registeredServerUrl: true,
           },
         },
         tools: {
-          where: { isEnabled: true },
+          where: { isEnabled: true, isWrite: false },
           select: {
             name: true,
           },
@@ -62,7 +63,7 @@ export async function createMcpToolsForAgent(
 
     for (const connection of connections) {
       const integration = connection.integration;
-      const integrationConfig = getIntegration(integration.name);
+      const integrationConfig = findIntegration(integration.name);
 
       if (!integrationConfig) {
         logger.warn("Integration config not found", {
@@ -71,9 +72,8 @@ export async function createMcpToolsForAgent(
         continue;
       }
 
-      // Use registered server URL if available, otherwise fall back to config
-      const serverUrl =
-        integration.registeredServerUrl ?? integrationConfig.serverUrl;
+      // registeredServerUrl is the OAuth discovery base URL, not the MCP endpoint
+      const serverUrl = getMcpServerUrl(integrationConfig);
       if (!serverUrl) {
         logger.warn("No server URL available", {
           integration: integration.name,
@@ -89,7 +89,7 @@ export async function createMcpToolsForAgent(
 
         const transport = createMcpTransport(serverUrl, authToken);
 
-        const mcpClient = await experimental_createMCPClient({ transport });
+        const mcpClient = await createMCPClient({ transport });
         clients.push(mcpClient);
 
         const mcpTools = await mcpClient.tools();
@@ -108,7 +108,7 @@ export async function createMcpToolsForAgent(
         });
       } catch (error) {
         logger.error("Failed to create MCP client for integration", {
-          error: error instanceof Error ? error.message : String(error),
+          error,
           integration: integration.name,
         });
         // Continue with other integrations

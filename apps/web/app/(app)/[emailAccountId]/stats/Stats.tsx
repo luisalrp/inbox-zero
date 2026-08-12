@@ -2,13 +2,14 @@
 
 import { useState, useMemo, useCallback, useEffect } from "react";
 import type { DateRange } from "react-day-picker";
-import subDays from "date-fns/subDays";
+import { subDays } from "date-fns/subDays";
 import { EmailAnalytics } from "@/app/(app)/[emailAccountId]/stats/EmailAnalytics";
 import { StatsSummary } from "@/app/(app)/[emailAccountId]/stats/StatsSummary";
 import { StatsOnboarding } from "@/app/(app)/[emailAccountId]/stats/StatsOnboarding";
 import { useStatLoader } from "@/providers/StatLoaderProvider";
 import { EmailActionsAnalytics } from "@/app/(app)/[emailAccountId]/stats/EmailActionsAnalytics";
 import { RuleStatsChart } from "./RuleStatsChart";
+import { ResponseTimeAnalytics } from "./ResponseTimeAnalytics";
 import { PageHeading } from "@/components/Typography";
 import { PageWrapper } from "@/components/PageWrapper";
 import { useOrgAccess } from "@/hooks/useOrgAccess";
@@ -17,6 +18,9 @@ import { ActionBar } from "@/app/(app)/[emailAccountId]/stats/ActionBar";
 import { DetailedStatsFilter } from "@/app/(app)/[emailAccountId]/stats/DetailedStatsFilter";
 import { LayoutGrid } from "lucide-react";
 import { DatePickerWithRange } from "@/components/DatePickerWithRange";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { CardBasic } from "@/components/ui/card";
+import { useProductAnalytics } from "@/hooks/useProductAnalytics";
 
 const selectOptions = [
   { label: "Last week", value: "7" },
@@ -28,6 +32,7 @@ const selectOptions = [
 const defaultSelected = selectOptions[1];
 
 export function Stats() {
+  const analytics = useProductAnalytics("analytics");
   const [dateDropdown, setDateDropdown] = useState<string>(
     defaultSelected.label,
   );
@@ -47,6 +52,10 @@ export function Stats() {
   const onSetDateDropdown = useCallback(
     (option: { label: string; value: string }) => {
       const { label, value } = option;
+      analytics.captureAction("analytics_date_range_changed", {
+        range_label: label,
+        range_days: Number.parseInt(value),
+      });
       setDateDropdown(label);
 
       if (value === "7") {
@@ -57,7 +66,7 @@ export function Stats() {
         setPeriod("month");
       }
     },
-    [period],
+    [analytics, period],
   );
 
   const { isLoading, onLoad } = useStatLoader();
@@ -92,43 +101,89 @@ export function Stats() {
             {
               label: "Day",
               checked: period === "day",
-              setChecked: () => setPeriod("day"),
+              setChecked: () => {
+                analytics.captureAction("analytics_grouping_changed", {
+                  period: "day",
+                });
+                setPeriod("day");
+              },
             },
             {
               label: "Week",
               checked: period === "week",
-              setChecked: () => setPeriod("week"),
+              setChecked: () => {
+                analytics.captureAction("analytics_grouping_changed", {
+                  period: "week",
+                });
+                setPeriod("week");
+              },
             },
             {
               label: "Month",
               checked: period === "month",
-              setChecked: () => setPeriod("month"),
+              setChecked: () => {
+                analytics.captureAction("analytics_grouping_changed", {
+                  period: "month",
+                });
+                setPeriod("month");
+              },
             },
             {
               label: "Year",
               checked: period === "year",
-              setChecked: () => setPeriod("year"),
+              setChecked: () => {
+                analytics.captureAction("analytics_grouping_changed", {
+                  period: "year",
+                });
+                setPeriod("year");
+              },
             },
           ]}
         />
       </ActionBar>
       <div className="grid gap-2 sm:gap-4 mt-2 sm:mt-4">
-        <StatsSummary
-          dateRange={dateRange}
-          refreshInterval={refreshInterval}
-          period={period}
-        />
-        <EmailAnalytics
-          dateRange={dateRange}
-          refreshInterval={refreshInterval}
-        />
-        <RuleStatsChart
-          dateRange={dateRange}
-          title="Assistant processed emails"
-        />
-        {isAccountOwner && <EmailActionsAnalytics />}
+        <ErrorBoundary fallback={<SectionError title="Summary" />}>
+          <StatsSummary
+            dateRange={dateRange}
+            refreshInterval={refreshInterval}
+            period={period}
+          />
+        </ErrorBoundary>
+        <ErrorBoundary fallback={<SectionError title="Email Analytics" />}>
+          <EmailAnalytics
+            dateRange={dateRange}
+            refreshInterval={refreshInterval}
+          />
+        </ErrorBoundary>
+        <ErrorBoundary fallback={<SectionError title="Response Time" />}>
+          <ResponseTimeAnalytics
+            dateRange={dateRange}
+            refreshInterval={refreshInterval}
+          />
+        </ErrorBoundary>
+        <ErrorBoundary fallback={<SectionError title="Rule Stats" />}>
+          <RuleStatsChart
+            dateRange={dateRange}
+            title="Assistant processed emails"
+          />
+        </ErrorBoundary>
+        {isAccountOwner && (
+          <ErrorBoundary fallback={<SectionError title="Email Actions" />}>
+            <EmailActionsAnalytics />
+          </ErrorBoundary>
+        )}
       </div>
       <StatsOnboarding />
     </PageWrapper>
+  );
+}
+
+function SectionError({ title }: { title: string }) {
+  return (
+    <CardBasic>
+      <p className="text-muted-foreground">
+        Unable to load {title}. Please try refreshing the page.
+      </p>
+    </CardBasic>
   );
 }

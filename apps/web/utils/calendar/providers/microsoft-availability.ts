@@ -1,23 +1,25 @@
 import type { Client } from "@microsoft/microsoft-graph-client";
-import { createScopedLogger } from "@/utils/logger";
+import type { Logger } from "@/utils/logger";
 import { getCalendarClientWithRefresh } from "@/utils/outlook/calendar-client";
 import type {
   CalendarAvailabilityProvider,
   BusyPeriod,
 } from "../availability-types";
 
-const logger = createScopedLogger("calendar/microsoft-availability");
-
 async function fetchMicrosoftCalendarBusyPeriods({
   calendarClient,
   calendarIds,
   timeMin,
   timeMax,
+  logger,
+  failOnCalendarError,
 }: {
   calendarClient: Client;
   calendarIds: string[];
   timeMin: string;
   timeMax: string;
+  logger: Logger;
+  failOnCalendarError?: boolean;
 }): Promise<BusyPeriod[]> {
   try {
     const allBusyPeriods: BusyPeriod[] = [];
@@ -37,6 +39,8 @@ async function fetchMicrosoftCalendarBusyPeriods({
                 .api(`/me/calendars/${calendarId}/calendarView`)
                 .query({ startDateTime, endDateTime })
                 .select("subject,start,end,showAs,isAllDay")
+                // Request events in UTC to avoid Windows timezone name conversion issues
+                .header("Prefer", 'outlook.timezone="UTC"')
                 .get()
             : await calendarClient.api(nextLink!).get();
 
@@ -49,9 +53,18 @@ async function fetchMicrosoftCalendarBusyPeriods({
                 event.start?.dateTime &&
                 event.end?.dateTime
               ) {
+                // With Prefer: outlook.timezone="UTC", dateTime is in UTC but without the Z suffix
+                // We need to add it for proper ISO 8601 format
+                const startDatetime = event.start.dateTime.endsWith("Z")
+                  ? event.start.dateTime
+                  : `${event.start.dateTime}Z`;
+                const endDatetime = event.end.dateTime.endsWith("Z")
+                  ? event.end.dateTime
+                  : `${event.end.dateTime}Z`;
+
                 allBusyPeriods.push({
-                  start: event.start.dateTime,
-                  end: event.end.dateTime,
+                  start: startDatetime,
+                  end: endDatetime,
                 });
               }
             }
@@ -65,6 +78,8 @@ async function fetchMicrosoftCalendarBusyPeriods({
           calendarId,
           error: calendarError,
         });
+
+        if (failOnCalendarError) throw calendarError;
       }
     }
 
@@ -75,30 +90,38 @@ async function fetchMicrosoftCalendarBusyPeriods({
   }
 }
 
-export const microsoftAvailabilityProvider: CalendarAvailabilityProvider = {
-  name: "microsoft",
+export function createMicrosoftAvailabilityProvider(
+  logger: Logger,
+): CalendarAvailabilityProvider {
+  return {
+    name: "microsoft",
 
-  async fetchBusyPeriods({
-    accessToken,
-    refreshToken,
-    expiresAt,
-    emailAccountId,
-    calendarIds,
-    timeMin,
-    timeMax,
-  }) {
-    const calendarClient = await getCalendarClientWithRefresh({
+    async fetchBusyPeriods({
       accessToken,
       refreshToken,
       expiresAt,
       emailAccountId,
-    });
-
-    return await fetchMicrosoftCalendarBusyPeriods({
-      calendarClient,
       calendarIds,
       timeMin,
       timeMax,
-    });
-  },
-};
+      failOnCalendarError,
+    }) {
+      const calendarClient = await getCalendarClientWithRefresh({
+        accessToken,
+        refreshToken,
+        expiresAt,
+        emailAccountId,
+        logger,
+      });
+
+      return await fetchMicrosoftCalendarBusyPeriods({
+        calendarClient,
+        calendarIds,
+        timeMin,
+        timeMax,
+        logger,
+        failOnCalendarError,
+      });
+    },
+  };
+}

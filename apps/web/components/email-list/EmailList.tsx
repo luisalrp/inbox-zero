@@ -50,9 +50,10 @@ export function List({
   const { emailAccountId } = useAccount();
   const [selectedTab] = useQueryState("tab", { defaultValue: "all" });
 
-  const planned = useMemo(() => {
-    return emails.filter((email) => email.plan?.rule);
-  }, [emails]);
+  const planned = useMemo(
+    () => emails.filter((email) => email.plan?.rule),
+    [emails],
+  );
 
   const tabs = useMemo(
     () => [
@@ -181,9 +182,10 @@ export function EmailList({
     setSelectedRows((s) => ({ ...s, [id]: !s[id] }));
   }, []);
 
-  const isAllSelected = useMemo(() => {
-    return threads.every((thread) => selectedRows[thread.id]);
-  }, [threads, selectedRows]);
+  const isAllSelected = useMemo(
+    () => threads.every((thread) => selectedRows[thread.id]),
+    [threads, selectedRows],
+  );
 
   const onToggleSelectAll = useCallback(() => {
     const newState = { ...selectedRows };
@@ -339,8 +341,7 @@ export function EmailList({
           .filter(([, selected]) => selected)
           .map(([id]) => threads.find((t) => t.id === id)!);
 
-        runAiRules(emailAccountId, selectedThreads, false);
-        // runAiRules(threadIds, () => refetch(threadIds));
+        await runAiRules(emailAccountId, selectedThreads, false);
       },
       {
         success: "Running AI rules...",
@@ -356,7 +357,13 @@ export function EmailList({
       {!(isEmpty && hideActionBarWhenEmpty) && (
         <div className="flex items-center border-b border-l-4 border-border bg-background px-4 py-1">
           <div className="pl-1">
-            <Checkbox checked={isAllSelected} onChange={onToggleSelectAll} />
+            <Checkbox
+              label={
+                isAllSelected ? "Deselect all emails" : "Select all emails"
+              }
+              checked={isAllSelected}
+              onChange={onToggleSelectAll}
+            />
           </div>
           <div className="ml-2">
             <ActionButtonsBulk
@@ -404,7 +411,7 @@ export function EmailList({
         <ResizeGroup
           left={
             <ul
-              className="divide-y divide-border overflow-y-auto scroll-smooth"
+              className="h-full min-w-0 divide-y divide-border overflow-x-hidden overflow-y-auto scroll-smooth"
               ref={listRef}
             >
               {threads.map((thread) => {
@@ -496,15 +503,23 @@ function ResizeGroup({
 }) {
   const isMobile = useIsMobile();
 
-  if (!right) return left;
+  if (!right) return <div className="min-h-0 flex-1">{left}</div>;
 
   return (
-    <ResizablePanelGroup direction={isMobile ? "vertical" : "horizontal"}>
-      <ResizablePanel style={{ overflow: "auto" }} defaultSize={50} minSize={0}>
+    <ResizablePanelGroup
+      className="min-h-0 flex-1"
+      direction={isMobile ? "vertical" : "horizontal"}
+    >
+      <ResizablePanel
+        style={{ overflow: "auto" }}
+        defaultSize={50}
+        minSize={0}
+        className="min-w-0"
+      >
         {left}
       </ResizablePanel>
       <ResizableHandle withHandle />
-      <ResizablePanel defaultSize={50} minSize={0}>
+      <ResizablePanel defaultSize={50} minSize={0} className="min-w-0">
         {right}
       </ResizablePanel>
     </ResizablePanelGroup>

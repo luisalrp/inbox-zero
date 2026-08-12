@@ -5,10 +5,10 @@ import { withGmailRetry } from "@/utils/gmail/retry";
 const logger = createScopedLogger("gmail-signature");
 
 export interface GmailSignature {
-  email: string;
-  signature: string;
-  isDefault: boolean;
   displayName?: string;
+  email: string;
+  isDefault: boolean;
+  signature: string;
 }
 
 /**
@@ -49,9 +49,7 @@ export async function getGmailSignatures(
 
     return signatures;
   } catch (error) {
-    logger.error("Failed to fetch Gmail signatures", {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    logger.error("Failed to fetch Gmail signatures", { error });
     throw error;
   }
 }

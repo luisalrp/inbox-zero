@@ -19,6 +19,7 @@ async function getData(emailAccountId: string) {
       isActive: true,
       integration: { select: { id: true, name: true } },
       tools: {
+        where: { isWrite: false },
         select: { id: true, name: true, description: true, isEnabled: true },
       },
     },
@@ -27,6 +28,9 @@ async function getData(emailAccountId: string) {
   const integrations = Object.values(MCP_INTEGRATIONS).map((integration) => ({
     name: integration.name,
     displayName: integration.displayName,
+    shortName: integration.shortName,
+    description: integration.description,
+    url: integration.url,
     comingSoon: integration.comingSoon,
     authType: integration.authType,
     connection: connections.find(

@@ -1,24 +1,31 @@
 import pRetry from "p-retry";
-import { createScopedLogger } from "@/utils/logger";
+import type { Logger } from "@/utils/logger";
 import { sleep } from "@/utils/sleep";
 import { isFetchError } from "@/utils/retry/is-fetch-error";
-
-const logger = createScopedLogger("outlook-retry");
+import { getRetryAfterHeaderFromError } from "@/utils/retry/get-retry-after-header";
 
 interface ErrorInfo {
-  status?: number;
   code?: string;
   errorMessage: string;
+  responseBody?: string;
+  status?: number;
 }
+
+// Intentionally lower than Microsoft's common 30s throttle backoff so serverless
+// requests fail fast instead of sleeping into function timeout budgets.
+// Non-serverless callers can pass a higher maxBlockingDelayMs when needed.
+export const MAX_OUTLOOK_BLOCKING_RETRY_DELAY_MS = 10_000;
 
 /**
  * Retries a Microsoft Graph API operation when rate limits or temporary server errors are encountered
- * - Rate limits: 429, "TooManyRequests" code
+ * - Rate limits: 429, "TooManyRequests", "ApplicationThrottled", "MailboxConcurrency"
  * - Server errors: 502, 503, 504, "ServiceNotAvailable", "ServerBusy"
  */
 export async function withOutlookRetry<T>(
   operation: () => Promise<T>,
+  logger: Logger,
   maxRetries = 5,
+  maxBlockingDelayMs = MAX_OUTLOOK_BLOCKING_RETRY_DELAY_MS,
 ): Promise<T> {
   return pRetry(operation, {
     retries: maxRetries,
@@ -32,24 +39,12 @@ export async function withOutlookRetry<T>(
           error,
           status: errorInfo.status,
           code: errorInfo.code,
+          responseBody: errorInfo.responseBody,
         });
         throw error;
       }
 
-      const err = error as Record<string, unknown>;
-      const retryAfterHeader =
-        (
-          (err?.response as Record<string, unknown>)?.headers as Record<
-            string,
-            string
-          >
-        )?.["retry-after"] ??
-        (
-          (err?.response as Record<string, unknown>)?.headers as Record<
-            string,
-            string
-          >
-        )?.["Retry-After"];
+      const retryAfterHeader = getRetryAfterHeaderFromError(error);
 
       const delayMs = calculateRetryDelay(
         isRateLimit,
@@ -63,13 +58,31 @@ export async function withOutlookRetry<T>(
         delaySeconds: Math.ceil(delayMs / 1000),
         attemptNumber: error.attemptNumber,
         maxRetries,
+        maxBlockingDelaySeconds: Math.ceil(maxBlockingDelayMs / 1000),
         status: errorInfo.status,
         code: errorInfo.code,
         isRateLimit,
         isServerError,
         isConflictError,
         isFetchError: isFetchError(errorInfo),
+        retryAfterHeader,
+        responseBody: errorInfo.responseBody,
       });
+
+      if (delayMs > maxBlockingDelayMs) {
+        logger.warn("Aborting retry due to long backoff in serverless", {
+          delaySeconds: Math.ceil(delayMs / 1000),
+          maxBlockingDelaySeconds: Math.ceil(maxBlockingDelayMs / 1000),
+          attemptNumber: error.attemptNumber,
+          maxRetries,
+          status: errorInfo.status,
+          code: errorInfo.code,
+          isRateLimit,
+          isServerError,
+          isConflictError,
+        });
+        throw error;
+      }
 
       // Apply the custom delay
       if (delayMs > 0) {
@@ -85,20 +98,17 @@ export async function withOutlookRetry<T>(
 export function extractErrorInfo(error: unknown): ErrorInfo {
   const err = error as Record<string, unknown>;
 
-  // Microsoft Graph SDK errors typically have statusCode or code properties
   const status =
     (err?.statusCode as number) ??
     (err?.status as number) ??
     ((err?.response as Record<string, unknown>)?.status as number) ??
     undefined;
 
-  // Error code from Microsoft Graph (e.g., "TooManyRequests", "ServiceNotAvailable")
   const code =
     (err?.code as string) ??
     ((err?.error as Record<string, unknown>)?.code as string) ??
     undefined;
 
-  // Extract error message
   const primaryMessage =
     (err?.message as string) ??
     ((err?.error as Record<string, unknown>)?.message as string) ??
@@ -107,7 +117,10 @@ export function extractErrorInfo(error: unknown): ErrorInfo {
 
   const errorMessage = String(primaryMessage);
 
-  return { status, code, errorMessage };
+  const responseBody =
+    typeof err?.body === "string" ? (err.body as string) : undefined;
+
+  return { status, code, errorMessage, responseBody };
 }
 
 /**
@@ -121,12 +134,13 @@ export function isRetryableError(errorInfo: ErrorInfo): {
 } {
   const { status, code, errorMessage } = errorInfo;
 
-  // Rate limit detection: 429 status or "TooManyRequests" code
+  // Rate limit detection: 429 status, throttling codes, or rate limit messages
   const isRateLimit =
     status === 429 ||
     code === "TooManyRequests" ||
+    code === "ApplicationThrottled" ||
     /rate limit/i.test(errorMessage) ||
-    /quota exceeded/i.test(errorMessage);
+    /MailboxConcurrency/i.test(errorMessage);
 
   // Temporary server errors that should be retried (502, 503, 504)
   const isServerError =

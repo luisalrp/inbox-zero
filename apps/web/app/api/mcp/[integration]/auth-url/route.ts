@@ -7,10 +7,16 @@ import {
   getMcpPkceCookieName,
   getMcpStateCookieName,
   getMcpOAuthStateType,
+  generateSignedOAuthState,
 } from "@/utils/oauth/state";
-import { getIntegration } from "@/utils/mcp/integrations";
-import { generateOAuthState } from "@/utils/oauth/state";
+import { findIntegration } from "@/utils/mcp/integrations";
 import { generateOAuthUrl } from "@/utils/mcp/oauth";
+import {
+  getUserTier,
+  hasTierAccess,
+  premiumEntitlementSelect,
+} from "@/utils/premium";
+import prisma from "@/utils/prisma";
 
 export type GetMcpAuthUrlResponse = { url: string };
 
@@ -25,7 +31,28 @@ export const GET = withEmailAccount(
       integration,
     });
 
-    const integrationConfig = getIntegration(integration);
+    // Check premium tier - integrations require Plus or higher
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        premium: {
+          select: premiumEntitlementSelect,
+        },
+      },
+    });
+
+    if (
+      !hasTierAccess({
+        tier: getUserTier(user?.premium),
+        minimumTier: "PLUS_MONTHLY",
+      })
+    ) {
+      throw new SafeError(
+        "Integrations require a Plus plan or higher. Please upgrade to continue.",
+      );
+    }
+
+    const integrationConfig = findIntegration(integration);
 
     if (!integrationConfig) {
       throw new SafeError(`Integration ${integration} not found`);
@@ -38,7 +65,7 @@ export const GET = withEmailAccount(
     try {
       const redirectUri = `${env.NEXT_PUBLIC_BASE_URL}/api/mcp/${integration}/callback`;
 
-      const state = generateOAuthState({
+      const state = generateSignedOAuthState({
         userId,
         emailAccountId,
         type: getMcpOAuthStateType(integration),

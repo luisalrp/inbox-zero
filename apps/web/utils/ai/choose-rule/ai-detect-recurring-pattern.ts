@@ -1,30 +1,31 @@
 import { z } from "zod";
 import type { EmailAccountWithAI } from "@/utils/llms/types";
 import type { EmailForLLM } from "@/utils/types";
-import { getModel } from "@/utils/llms/model";
+import { getModelForUseCase, LlmUseCase } from "@/utils/llms/use-cases";
 import { createGenerateObject } from "@/utils/llms";
-import { createScopedLogger } from "@/utils/logger";
+import type { Logger } from "@/utils/logger";
 import {
   getEmailListPrompt,
   getUserInfoPrompt,
   getUserRulesPrompt,
 } from "@/utils/ai/helpers";
 
-const logger = createScopedLogger("ai-detect-recurring-pattern");
-
 // const braintrust = new Braintrust("recurring-pattern-detection");
 
 const schema = z.object({
-  matchedRule: z.string().nullish(),
+  matchedRule: z.string().nullable(),
   explanation: z.string(),
 });
 export type DetectPatternResult = z.infer<typeof schema>;
+
+const MAX_PATTERN_SAMPLE_EMAILS = 10;
 
 export async function aiDetectRecurringPattern({
   emails,
   emailAccount,
   rules,
   consistentRuleName,
+  logger,
 }: {
   emails: EmailForLLM[];
   emailAccount: EmailAccountWithAI;
@@ -33,12 +34,20 @@ export async function aiDetectRecurringPattern({
     instructions: string;
   }[];
   consistentRuleName?: string;
+  logger: Logger;
 }): Promise<DetectPatternResult | null> {
   // Extract the sender email from the first email
   // All emails should be from the same sender
   const senderEmail = emails[0].from;
 
   if (!senderEmail) return null;
+
+  if (emails.length > MAX_PATTERN_SAMPLE_EMAILS) {
+    logger.info("Truncating sender pattern history for prompt", {
+      emailCount: emails.length,
+      sampledEmailCount: MAX_PATTERN_SAMPLE_EMAILS,
+    });
+  }
 
   const system = `You are an AI assistant that helps analyze if a sender's emails should consistently be matched to a specific rule.
 
@@ -90,16 +99,24 @@ If you're not confident (at least 90% certain) that a single rule should handle 
 <sender>${senderEmail}</sender>
 
 <sample_emails>
-${getEmailListPrompt({ messages: emails, messageMaxLength: 500 })}
+${getEmailListPrompt({
+  messages: emails,
+  messageMaxLength: 500,
+  maxMessages: MAX_PATTERN_SAMPLE_EMAILS,
+})}
 </sample_emails>`;
 
   try {
-    const modelOptions = getModel(emailAccount.user, "chat");
+    const modelOptions = getModelForUseCase(
+      emailAccount.user,
+      LlmUseCase.DetectRecurringPattern,
+    );
 
     const generateObject = createGenerateObject({
       emailAccount,
       label: "Detect recurring pattern",
       modelOptions,
+      promptHardening: { trust: "untrusted", level: "compact" },
     });
 
     const aiResponse = await generateObject({

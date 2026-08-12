@@ -3,6 +3,7 @@ import {
   ChartContainer,
   ChartTooltip,
 } from "@/components/ui/chart";
+import type { ComponentType, ReactNode } from "react";
 import {
   Bar,
   BarChart as RechartsBarChart,
@@ -11,14 +12,51 @@ import {
   YAxis,
 } from "recharts";
 
+const ChartBar = Bar as unknown as ComponentType<{
+  animationBegin?: number;
+  animationDuration?: number;
+  color?: string;
+  dataKey: string;
+  fill?: string;
+  hide?: boolean;
+  radius?: [number, number, number, number];
+}>;
+const ChartXAxis = XAxis as unknown as ComponentType<{
+  axisLine?: boolean;
+  dataKey: string;
+  minTickGap?: number;
+  tickFormatter: (value: string) => string;
+  tickLine?: boolean;
+  tickMargin?: number;
+}>;
+const ChartYAxis = YAxis as unknown as ComponentType<{
+  axisLine?: boolean;
+  tickFormatter?: (value: number) => string;
+  tickLine?: boolean;
+  tickMargin?: number;
+}>;
+const ChartTooltipComponent = ChartTooltip as unknown as ComponentType<{
+  content: (props: {
+    active?: boolean;
+    payload?: {
+      dataKey: string;
+      payload: Record<string, string | number>;
+      value: number;
+    }[];
+  }) => ReactNode;
+}>;
+
 interface BarChartProps {
-  data: { [key: string]: string | number }[];
-  config: ChartConfig;
-  dataKeys?: string[];
-  xAxisKey?: string;
-  xAxisFormatter?: (value: string) => string;
   activeCharts?: string[];
+  config: ChartConfig;
+  data: { [key: string]: string | number }[];
+  dataKeys?: string[];
   period?: "day" | "week" | "month" | "year";
+  tooltipLabelFormatter?: (value: string | number) => string;
+  tooltipValueFormatter?: (value: number) => string;
+  xAxisFormatter?: (value: string) => string;
+  xAxisKey?: string;
+  yAxisFormatter?: (value: number) => string;
 }
 
 export function BarChart({
@@ -27,10 +65,13 @@ export function BarChart({
   dataKeys,
   xAxisKey = "date",
   xAxisFormatter,
+  yAxisFormatter,
+  tooltipLabelFormatter,
+  tooltipValueFormatter,
   activeCharts,
   period,
 }: BarChartProps) {
-  const defaultFormatter = (value: any) => {
+  const defaultFormatter = (value: string) => {
     const date = new Date(value);
 
     if (period === "year") {
@@ -93,7 +134,7 @@ export function BarChart({
           ))}
         </defs>
         <CartesianGrid vertical={false} />
-        <XAxis
+        <ChartXAxis
           dataKey={xAxisKey}
           tickLine={false}
           axisLine={false}
@@ -101,27 +142,47 @@ export function BarChart({
           minTickGap={32}
           tickFormatter={formatter}
         />
-        <YAxis tickLine={false} axisLine={false} tickMargin={8} />
-        <ChartTooltip
+        <ChartYAxis
+          tickLine={false}
+          axisLine={false}
+          tickMargin={8}
+          tickFormatter={yAxisFormatter}
+        />
+        <ChartTooltipComponent
           content={({ active, payload }) => {
             if (!active || !payload?.length) return null;
             const data = payload[0];
-            const date = new Date(data.payload[xAxisKey]);
+            const xValue = data.payload[xAxisKey];
 
-            let dateFormat: Intl.DateTimeFormatOptions;
-            if (period === "year") {
-              dateFormat = { year: "numeric" };
-            } else if (period === "month") {
-              dateFormat = { month: "short", year: "numeric" };
+            // Use custom formatter if provided, otherwise try date formatting with fallback
+            let label: string;
+            if (tooltipLabelFormatter) {
+              label = tooltipLabelFormatter(xValue);
             } else {
-              dateFormat = { month: "short", day: "numeric", year: "numeric" };
+              const date = new Date(xValue);
+              if (Number.isNaN(date.getTime())) {
+                // Fallback for non-date values
+                label = String(xValue);
+              } else {
+                let dateFormat: Intl.DateTimeFormatOptions;
+                if (period === "year") {
+                  dateFormat = { year: "numeric" };
+                } else if (period === "month") {
+                  dateFormat = { month: "short", year: "numeric" };
+                } else {
+                  dateFormat = {
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                  };
+                }
+                label = date.toLocaleDateString("en-US", dateFormat);
+              }
             }
 
             return (
               <div className="rounded-lg border border-border/50 bg-background px-3 py-2 text-xs shadow-xl">
-                <p className="mb-2 font-medium">
-                  {date.toLocaleDateString("en-US", dateFormat)}
-                </p>
+                <p className="mb-2 font-medium">{label}</p>
                 {payload.map((entry) => (
                   <div
                     key={entry.dataKey}
@@ -137,7 +198,11 @@ export function BarChart({
                     <span className="text-muted-foreground">
                       {config[entry.dataKey as keyof typeof config]?.label}:
                     </span>
-                    <span className="ml-auto font-medium">{entry.value}</span>
+                    <span className="ml-auto font-medium">
+                      {tooltipValueFormatter
+                        ? tooltipValueFormatter(entry.value as number)
+                        : entry.value}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -145,7 +210,7 @@ export function BarChart({
           }}
         />
         {keys.map((key) => (
-          <Bar
+          <ChartBar
             key={key}
             dataKey={key}
             fill={`url(#${key}Gradient)`}

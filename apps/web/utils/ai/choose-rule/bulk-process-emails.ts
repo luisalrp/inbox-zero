@@ -2,7 +2,7 @@ import prisma from "@/utils/prisma";
 import { createEmailProvider } from "@/utils/email/provider";
 import { runRules } from "@/utils/ai/choose-rule/run-rules";
 import type { Logger } from "@/utils/logger";
-import type { EmailAccountWithAI } from "@/utils/llms/types";
+import type { EmailAccountForDrafting } from "@/utils/ai/choose-rule/choose-args";
 import type { ParsedMessage } from "@/utils/types";
 
 export async function bulkProcessInboxEmails({
@@ -12,7 +12,7 @@ export async function bulkProcessInboxEmails({
   skipArchive,
   logger: log,
 }: {
-  emailAccount: EmailAccountWithAI;
+  emailAccount: EmailAccountForDrafting;
   provider: string;
   maxEmails: number;
   skipArchive: boolean;
@@ -29,17 +29,16 @@ export async function bulkProcessInboxEmails({
       logger,
     });
 
-    const [{ messages }, rules] = await Promise.all([
-      emailProvider.getMessagesByFields({
-        type: "inbox",
-        maxResults: maxEmails,
-      }),
+    const [messages, rules] = await Promise.all([
+      emailProvider.getInboxMessages(maxEmails),
       prisma.rule.findMany({
         where: {
           emailAccountId: emailAccount.id,
           enabled: true,
         },
-        include: { actions: true },
+        include: {
+          actions: true,
+        },
       }),
     ]);
 

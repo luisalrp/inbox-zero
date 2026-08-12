@@ -3,11 +3,13 @@
 import { after } from "next/server";
 import {
   saveOnboardingAnswersBody,
+  saveOnboardingChatAnswersBody,
   saveOnboardingFeaturesSchema,
 } from "@/utils/actions/onboarding.validation";
 import { actionClientUser } from "@/utils/actions/safe-action";
 import prisma from "@/utils/prisma";
 import { updateContactCompanySize, updateContactRole } from "@inboxzero/loops";
+import { trackOnboardingAnswer } from "@/utils/posthog";
 
 export const completedOnboardingAction = actionClientUser
   .metadata({ name: "completedOnboarding" })
@@ -26,6 +28,7 @@ export const saveOnboardingAnswersAction = actionClientUser
       parsedInput: { surveyId, questions, answers },
       ctx: { userId, userEmail, logger },
     }) => {
+      // biome-ignore lint/suspicious/noExplicitAny: existing loose external shape
       function extractSurveyAnswers(questions: any[], answers: any) {
         const result: {
           surveyFeatures?: string[];
@@ -108,26 +111,6 @@ export const saveOnboardingAnswersAction = actionClientUser
 
       const extractedAnswers = extractSurveyAnswers(questions, answers);
 
-      after(async () => {
-        if (extractedAnswers.surveyRole) {
-          await updateContactRole({
-            email: userEmail,
-            role: extractedAnswers.surveyRole,
-          }).catch((error) => {
-            logger.error("Loops: Error updating role", { error });
-          });
-        }
-
-        if (extractedAnswers.surveyCompanySize) {
-          await updateContactCompanySize({
-            email: userEmail,
-            companySize: extractedAnswers.surveyCompanySize,
-          }).catch((error) => {
-            logger.error("Loops: Error updating company size", { error });
-          });
-        }
-      });
-
       await prisma.user.update({
         where: { id: userId },
         data: {
@@ -140,6 +123,77 @@ export const saveOnboardingAnswersAction = actionClientUser
           surveyImprovements: extractedAnswers.surveyImprovements,
         },
       });
+
+      after(async () => {
+        await Promise.all([
+          extractedAnswers.surveyRole
+            ? updateContactRole({
+                email: userEmail,
+                role: extractedAnswers.surveyRole,
+              }).catch((error) => {
+                logger.error("Loops: Error updating role", { error });
+              })
+            : null,
+          extractedAnswers.surveyCompanySize
+            ? updateContactCompanySize({
+                email: userEmail,
+                companySize: extractedAnswers.surveyCompanySize,
+              }).catch((error) => {
+                logger.error("Loops: Error updating company size", { error });
+              })
+            : null,
+          Object.keys(extractedAnswers).length > 0
+            ? trackOnboardingAnswer(userEmail, extractedAnswers).catch(
+                (error) => {
+                  logger.error("PostHog: Error tracking onboarding answers", {
+                    error,
+                  });
+                },
+              )
+            : null,
+        ]);
+      });
+    },
+  );
+
+// Stores the full transcript of answers from the chat onboarding variant.
+// Called after each answer with the accumulated list so partial data survives
+// abandonment. Role is saved separately via updateEmailAccountRoleAction.
+export const saveOnboardingChatAnswersAction = actionClientUser
+  .metadata({ name: "saveOnboardingChatAnswers" })
+  .inputSchema(saveOnboardingChatAnswersBody)
+  .action(
+    async ({
+      parsedInput: { answers },
+      ctx: { userId, userEmail, logger },
+    }) => {
+      // "discovery" is the pain-point key in the LLM-guided flow; "struggle"
+      // was its name in the earlier scripted flow
+      const painPointKeys = ["discovery", "struggle"];
+      const struggle = answers.find((a) =>
+        painPointKeys.includes(a.key),
+      )?.answer;
+      const latestAnswer = answers.at(-1);
+
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          onboardingAnswers: { surveyId: "chat-onboarding", answers },
+          ...(struggle ? { surveyGoal: struggle } : {}),
+        },
+      });
+
+      if (struggle && painPointKeys.includes(latestAnswer?.key ?? "")) {
+        after(async () => {
+          await trackOnboardingAnswer(userEmail, {
+            surveyGoal: struggle,
+          }).catch((error) => {
+            logger.error("PostHog: Error tracking chat onboarding answers", {
+              error,
+            });
+          });
+        });
+      }
     },
   );
 

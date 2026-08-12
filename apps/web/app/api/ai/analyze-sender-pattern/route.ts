@@ -1,52 +1,50 @@
 import { NextResponse, after } from "next/server";
 import { headers } from "next/headers";
-import { z } from "zod";
 import { withError } from "@/utils/middleware";
 import prisma from "@/utils/prisma";
-import { createScopedLogger, type Logger } from "@/utils/logger";
+import type { Logger } from "@/utils/logger";
 import type { ParsedMessage } from "@/utils/types";
 import { aiDetectRecurringPattern } from "@/utils/ai/choose-rule/ai-detect-recurring-pattern";
+import { analyzeSenderPatternBodySchema } from "@/utils/ai/choose-rule/analyze-sender-pattern";
 import { isValidInternalApiKey } from "@/utils/internal-api";
-import { extractEmailAddress } from "@/utils/email";
+import { canonicalizeEmailAddress, extractEmailAddress } from "@/utils/email";
 import { getEmailForLLM } from "@/utils/get-email-from-message";
 import { saveLearnedPattern } from "@/utils/rule/learned-patterns";
+import { GroupItemSource } from "@/generated/prisma/enums";
 import { checkSenderRuleHistory } from "@/utils/rule/check-sender-rule-history";
 import { createEmailProvider } from "@/utils/email/provider";
 import type { EmailProvider } from "@/utils/email/types";
+import { upsertSenderRecord } from "@/utils/senders/record";
 
 export const maxDuration = 60;
 
 const THRESHOLD_THREADS = 3;
 const MAX_RESULTS = 10;
 
-const schema = z.object({
-  emailAccountId: z.string(),
-  from: z.string(),
-});
-export type AnalyzeSenderPatternBody = z.infer<typeof schema>;
+export const POST = withError(
+  "api/ai/analyze-sender-pattern",
+  async (request) => {
+    const json = await request.json();
 
-export const POST = withError(async (request) => {
-  const json = await request.json();
+    let logger = request.logger;
 
-  let logger = createScopedLogger("api/ai/pattern-match");
+    if (!isValidInternalApiKey(await headers(), logger)) {
+      return NextResponse.json({ error: "Invalid API key" }, { status: 401 });
+    }
 
-  if (!isValidInternalApiKey(await headers(), logger)) {
-    logger.error("Invalid API key for sender pattern analysis", json);
-    return NextResponse.json({ error: "Invalid API key" });
-  }
+    const data = analyzeSenderPatternBodySchema.parse(json);
+    const { emailAccountId } = data;
+    const from = canonicalizeEmailAddress(data.from);
 
-  const data = schema.parse(json);
-  const { emailAccountId } = data;
-  const from = extractEmailAddress(data.from);
+    logger = logger.with({ from });
 
-  logger = logger.with({ emailAccountId, from });
+    logger.trace("Analyzing sender pattern");
 
-  logger.trace("Analyzing sender pattern");
-
-  // return immediately and process in background
-  after(() => process({ emailAccountId, from, logger }));
-  return NextResponse.json({ processing: true });
-});
+    // return immediately and process in background
+    after(() => process({ emailAccountId, from, logger }));
+    return NextResponse.json({ processing: true });
+  },
+);
 
 /**
  * Main background process function that:
@@ -73,16 +71,15 @@ async function process({
       return NextResponse.json({ success: false }, { status: 404 });
     }
 
-    const existingCheck = await prisma.newsletter.findUnique({
+    const existingCheck = await prisma.newsletter.findFirst({
       where: {
-        email_emailAccountId: {
-          email: extractEmailAddress(from),
-          emailAccountId: emailAccount.id,
-        },
+        emailAccountId: emailAccount.id,
+        email: { equals: from, mode: "insensitive" },
+        patternAnalyzed: true,
       },
     });
 
-    if (existingCheck?.patternAnalyzed) {
+    if (existingCheck) {
       logger.info("Sender has already been analyzed");
       return NextResponse.json({ success: true });
     }
@@ -97,6 +94,7 @@ async function process({
     const provider = await createEmailProvider({
       emailAccountId,
       provider: account.provider,
+      logger,
     });
 
     const { threads: threadsWithMessages, conversationDetected } =
@@ -112,7 +110,7 @@ async function process({
     }
 
     if (threadsWithMessages.length === 0) {
-      logger.error("No threads found from this sender", {
+      logger.info("No threads found from this sender", {
         provider: account.provider,
       });
 
@@ -136,6 +134,7 @@ async function process({
       emailAccountId,
       from,
       provider,
+      logger,
     });
 
     if (!senderHistory.hasConsistentRule) {
@@ -166,16 +165,30 @@ async function process({
         instructions: rule.instructions || "",
       })),
       consistentRuleName: senderHistory.consistentRuleName,
+      logger,
     });
 
     if (patternResult?.matchedRule) {
       // Verify the AI matched the same rule as the historical data
       if (patternResult.matchedRule === senderHistory.consistentRuleName) {
-        await saveLearnedPattern({
-          emailAccountId,
-          from,
-          ruleName: patternResult.matchedRule,
-        });
+        const matchedRule = emailAccount.rules.find(
+          (rule) => rule.name === patternResult.matchedRule,
+        );
+
+        if (matchedRule) {
+          await saveLearnedPattern({
+            emailAccountId,
+            from,
+            ruleId: matchedRule.id,
+            logger,
+            source: GroupItemSource.AI,
+          });
+        } else {
+          logger.error("Matched rule not found in email account rules", {
+            ruleName: patternResult.matchedRule,
+            availableRules: emailAccount.rules.map((r) => r.name),
+          });
+        }
       } else {
         logger.warn("AI suggested different rule than historical data", {
           aiRule: patternResult.matchedRule,
@@ -207,20 +220,10 @@ async function savePatternCheck({
   emailAccountId: string;
   from: string;
 }) {
-  await prisma.newsletter.upsert({
-    where: {
-      email_emailAccountId: {
-        email: from,
-        emailAccountId,
-      },
-    },
-    update: {
-      patternAnalyzed: true,
-      lastAnalyzedAt: new Date(),
-    },
-    create: {
-      email: from,
-      emailAccountId,
+  await upsertSenderRecord({
+    emailAccountId,
+    senderEmail: from,
+    changes: {
       patternAnalyzed: true,
       lastAnalyzedAt: new Date(),
     },
@@ -316,6 +319,7 @@ async function getEmailAccountWithRules({
       email: true,
       about: true,
       multiRuleSelectionEnabled: true,
+      sensitiveDataPolicy: true,
       timezone: true,
       calendarBookingLink: true,
       user: {

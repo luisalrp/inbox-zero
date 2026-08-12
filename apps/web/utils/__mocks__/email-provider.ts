@@ -48,7 +48,9 @@ export const createMockEmailProvider = (
   getLabelByName: vi.fn().mockResolvedValue(null),
   getMessageByRfc822MessageId: vi.fn().mockResolvedValue(null),
   getFolders: vi.fn().mockResolvedValue([]),
+  getFolderCounts: vi.fn().mockResolvedValue([]),
   getSignatures: vi.fn().mockResolvedValue([]),
+  getInboxStats: vi.fn().mockResolvedValue({ total: 0, unread: 0 }),
   getMessage: vi.fn().mockResolvedValue({
     id: "msg1",
     threadId: "thread1",
@@ -69,14 +71,22 @@ export const createMockEmailProvider = (
     labelIds: [],
   }),
   getSentMessages: vi.fn().mockResolvedValue([]),
+  getInboxMessages: vi.fn().mockResolvedValue([]),
+  getSentMessageIds: vi.fn().mockResolvedValue({ messages: [] }),
   getSentThreadsExcluding: vi.fn().mockResolvedValue([]),
   getThreadMessages: vi.fn().mockResolvedValue([]),
   getThreadMessagesInInbox: vi.fn().mockResolvedValue([]),
   getPreviousConversationMessages: vi.fn().mockResolvedValue([]),
   archiveThread: vi.fn().mockResolvedValue(undefined),
   archiveThreadWithLabel: vi.fn().mockResolvedValue(undefined),
+  bulkArchiveThreads: vi.fn().mockResolvedValue({
+    succeededThreadIds: [],
+    failedThreadIds: [],
+  }),
   archiveMessage: vi.fn().mockResolvedValue(undefined),
   trashThread: vi.fn().mockResolvedValue(undefined),
+  unarchiveThread: vi.fn().mockResolvedValue(undefined),
+  untrashThread: vi.fn().mockResolvedValue(undefined),
   bulkArchiveFromSenders: vi.fn().mockResolvedValue(undefined),
   bulkTrashFromSenders: vi.fn().mockResolvedValue(undefined),
   labelMessage: vi.fn().mockResolvedValue(undefined),
@@ -87,11 +97,17 @@ export const createMockEmailProvider = (
   sendEmail: vi.fn().mockResolvedValue(undefined),
   forwardEmail: vi.fn().mockResolvedValue(undefined),
   markSpam: vi.fn().mockResolvedValue(undefined),
+  starMessage: vi.fn().mockResolvedValue(undefined),
   blockUnsubscribedEmail: vi.fn().mockResolvedValue(undefined),
   markRead: vi.fn().mockResolvedValue(undefined),
   markReadThread: vi.fn().mockResolvedValue(undefined),
   getDraft: vi.fn().mockResolvedValue(null),
   deleteDraft: vi.fn().mockResolvedValue(undefined),
+  sendDraft: vi
+    .fn()
+    .mockResolvedValue({ messageId: "sent-msg1", threadId: "thread1" }),
+  createDraft: vi.fn().mockResolvedValue({ id: "draft-new" }),
+  updateDraft: vi.fn().mockResolvedValue(undefined),
   createLabel: vi
     .fn()
     .mockResolvedValue({ id: "label1", name: "Test Label", type: "user" }),
@@ -107,9 +123,26 @@ export const createMockEmailProvider = (
   getMessagesWithPagination: vi
     .fn()
     .mockResolvedValue({ messages: [], nextPageToken: undefined }),
+  getMailboxSyncPage: vi.fn().mockResolvedValue({
+    cursor: "sync-cursor",
+    deletedMessageIds: [],
+    hasMore: false,
+    reset: false,
+    upsertedMessages: [],
+  }),
+  searchMessages: vi
+    .fn()
+    .mockResolvedValue({ messages: [], nextPageToken: undefined }),
   getMessagesFromSender: vi
     .fn()
     .mockResolvedValue({ messages: [], nextPageToken: undefined }),
+  getMessagesWithAttachments: vi
+    .fn()
+    .mockResolvedValue({ messages: [], nextPageToken: undefined }),
+  getThreadsWithParticipant: vi.fn().mockResolvedValue([]),
+  getThreadsWithLabel: vi.fn().mockResolvedValue([]),
+  getLatestMessageFromThreadSnapshot: vi.fn().mockResolvedValue(null),
+  getLatestMessageInThread: vi.fn().mockResolvedValue(null),
   getMessagesBatch: vi.fn().mockResolvedValue([]),
   getAccessToken: vi.fn().mockReturnValue("mock-token"),
   checkIfReplySent: vi.fn().mockResolvedValue(false),
@@ -128,10 +161,7 @@ export const createMockEmailProvider = (
   getThreadsFromSenderWithSubject: vi.fn().mockResolvedValue([]),
   processHistory: vi.fn().mockResolvedValue(undefined),
   moveThreadToFolder: vi.fn().mockResolvedValue(undefined),
-  getMessagesByFields: vi
-    .fn()
-    .mockResolvedValue({ messages: [], nextPageToken: undefined }),
-  getOrCreateOutlookFolderIdByName: vi.fn().mockResolvedValue("folder1"),
+  getOrCreateFolderIdByName: vi.fn().mockResolvedValue("folder1"),
   sendEmailWithHtml: vi.fn().mockResolvedValue(undefined),
   getDrafts: vi.fn().mockResolvedValue([]),
   ...overrides,

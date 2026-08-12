@@ -1,4 +1,5 @@
 import "../../styles/globals.css";
+import type { Metadata } from "next";
 import type React from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -11,13 +12,17 @@ import { CommandK } from "@/components/CommandK";
 import { AppProviders } from "@/providers/AppProviders";
 import { AssessUser } from "@/app/(app)/[emailAccountId]/assess";
 import { SentryIdentify } from "@/app/(app)/sentry-identify";
+import { AiAutomationStatusBanner } from "@/app/(app)/AiAutomationStatusBanner";
 import { ErrorMessages } from "@/app/(app)/ErrorMessages";
+import { ProviderRateLimitBanner } from "@/app/(app)/ProviderRateLimitBanner";
 import { QueueInitializer } from "@/store/QueueInitializer";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { EmailViewer } from "@/components/EmailViewer";
+import { AnnouncementDialog } from "@/components/feature-announcements/AnnouncementDialog";
 import { captureException } from "@/utils/error";
 import prisma from "@/utils/prisma";
 import { createScopedLogger } from "@/utils/logger";
+import { booleanString } from "@/utils/zod";
 
 const logger = createScopedLogger("AppLayout");
 
@@ -28,6 +33,13 @@ const inter = Inter({
   preload: true,
   display: "swap",
 });
+
+export const metadata: Metadata = {
+  robots: {
+    index: false,
+    follow: false,
+  },
+};
 
 export const viewport = {
   themeColor: "#FFF",
@@ -52,6 +64,8 @@ export default async function AppLayout({
 
   const cookieStore = await cookies();
   const isClosed = cookieStore.get("left-sidebar:state")?.value === "false";
+  const bypassPremiumChecks =
+    booleanString.parse(process.env.NEXT_PUBLIC_BYPASS_PREMIUM_CHECKS) ?? false;
 
   after(async () => {
     const email = session.user.email;
@@ -62,7 +76,7 @@ export default async function AppLayout({
       });
     } catch (error) {
       logger.error("Failed to update last login", { email, error });
-      captureException(error, {}, email);
+      captureException(error, { userEmail: email });
     }
   });
 
@@ -70,11 +84,19 @@ export default async function AppLayout({
     <div className={inter.variable}>
       <div className="font-inter">
         <AppProviders>
-          <SideNavWithTopNav defaultOpen={!isClosed}>
+          <SideNavWithTopNav
+            defaultOpen={!isClosed}
+            feedbackEnabled={
+              !bypassPremiumChecks || Boolean(process.env.FEEDBACK_WEBHOOK_URL)
+            }
+          >
+            <AiAutomationStatusBanner />
             <ErrorMessages />
+            <ProviderRateLimitBanner />
             {children}
           </SideNavWithTopNav>
           <EmailViewer />
+          <AnnouncementDialog />
           <ErrorBoundary extra={{ component: "AppLayout" }}>
             <PostHogIdentify />
 

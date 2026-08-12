@@ -1,20 +1,24 @@
-import type { z } from "zod";
 import { after, NextResponse } from "next/server";
 import { withError } from "@/utils/middleware";
-import { processHistoryForUser } from "@/app/api/outlook/webhook/process-history";
-import { createScopedLogger, type Logger } from "@/utils/logger";
+import { processHistoryForUser } from "@/utils/webhook/outlook/process-history";
+import { processOutlookLifecycleNotification } from "@/app/api/outlook/webhook/process-lifecycle";
+import type { Logger } from "@/utils/logger";
 import { env } from "@/env";
-import { webhookBodySchema } from "@/app/api/outlook/webhook/types";
+import {
+  type OutlookWebhookNotification,
+  webhookBodySchema,
+} from "@/utils/webhook/outlook/types";
 import { handleWebhookError } from "@/utils/webhook/error-handler";
+import { runWithBackgroundLoggerFlush } from "@/utils/logger-flush";
 import { getWebhookEmailAccount } from "@/utils/webhook/validate-webhook-account";
 
 export const maxDuration = 300;
 
-export const POST = withError(async (request) => {
+export const POST = withError("outlook/webhook", async (request) => {
   const searchParams = new URL(request.url).searchParams;
   const validationToken = searchParams.get("validationToken");
 
-  const logger = createScopedLogger("outlook/webhook");
+  const logger = request.logger;
 
   if (validationToken) {
     logger.info("Received validation request", { validationToken });
@@ -30,12 +34,12 @@ export const POST = withError(async (request) => {
   if (!parseResult.success) {
     logger.error("Invalid webhook payload", {
       body: rawBody,
-      errors: parseResult.error.errors,
+      errors: parseResult.error.issues,
     });
     return NextResponse.json(
       {
         error: "Invalid webhook payload",
-        details: parseResult.error.errors,
+        details: parseResult.error.issues,
       },
       { status: 400 },
     );
@@ -44,11 +48,19 @@ export const POST = withError(async (request) => {
   const body = parseResult.data;
 
   // Validate clientState for security (verify webhook is from Microsoft)
+  const expectedClientState = env.MICROSOFT_WEBHOOK_CLIENT_STATE;
+
+  if (!expectedClientState) {
+    logger.error("MICROSOFT_WEBHOOK_CLIENT_STATE not configured");
+    return NextResponse.json(
+      { error: "Webhook not configured" },
+      { status: 500 },
+    );
+  }
+
   for (const notification of body.value) {
-    if (notification.clientState !== env.MICROSOFT_WEBHOOK_CLIENT_STATE) {
+    if (notification.clientState !== expectedClientState) {
       logger.warn("Invalid or missing clientState", {
-        receivedClientState: notification.clientState,
-        hasExpectedClientState: !!env.MICROSOFT_WEBHOOK_CLIENT_STATE,
         subscriptionId: notification.subscriptionId,
       });
       return NextResponse.json(
@@ -67,24 +79,50 @@ export const POST = withError(async (request) => {
 
   // Process notifications asynchronously using after() to avoid Microsoft webhook timeout
   // Microsoft expects a response within 3 seconds
-  after(() => processNotificationsAsync(notifications, logger));
+  after(() =>
+    runWithBackgroundLoggerFlush({
+      logger,
+      task: () => processNotificationsAsync(notifications, logger),
+      extra: { url: "/api/outlook/webhook" },
+    }),
+  );
 
   return NextResponse.json({ ok: true });
 });
 
 async function processNotificationsAsync(
-  notifications: z.infer<typeof webhookBodySchema>["value"],
+  notifications: OutlookWebhookNotification[],
   log: Logger,
 ) {
   for (const notification of notifications) {
-    const { subscriptionId, resourceData } = notification;
-    const logger = log.with({ subscriptionId, messageId: resourceData.id });
-
-    logger.info("Processing notification", {
-      changeType: notification.changeType,
+    const { subscriptionId } = notification;
+    const logger = log.with({
+      subscriptionId,
+      ...(notification.resourceData?.id
+        ? { messageId: notification.resourceData.id }
+        : {}),
     });
 
     try {
+      if (notification.lifecycleEvent) {
+        await processOutlookLifecycleNotification({
+          notification,
+          logger,
+        });
+        continue;
+      }
+
+      if (!notification.resourceData) {
+        logger.warn("Skipping Outlook notification without resource data");
+        continue;
+      }
+
+      const { resourceData } = notification;
+
+      logger.info("Processing notification", {
+        changeType: notification.changeType,
+      });
+
       await processHistoryForUser({
         subscriptionId,
         resourceData,
@@ -95,9 +133,7 @@ async function processNotificationsAsync(
         { watchEmailsSubscriptionId: subscriptionId },
         logger,
       ).catch((error) => {
-        logger.error("Error getting email account", {
-          error: error instanceof Error ? error.message : error,
-        });
+        logger.error("Error getting email account", { error });
         return null;
       });
 
@@ -110,7 +146,7 @@ async function processNotificationsAsync(
         });
       } else {
         logger.error("Error processing notification (no email account found)", {
-          error: error instanceof Error ? error.message : error,
+          error,
         });
       }
     }

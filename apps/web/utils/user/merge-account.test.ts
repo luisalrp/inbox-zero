@@ -1,16 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mergeAccount } from "./merge-account";
 import prisma from "@/utils/__mocks__/prisma";
-import { createScopedLogger } from "@/utils/logger";
-import {
-  getMockEmailAccountSelect,
-  getMockUserSelect,
-} from "@/__tests__/helpers";
+import { getMockUserSelect, createTestLogger } from "@/__tests__/helpers";
 
 vi.mock("@/utils/prisma");
 vi.mock("@/utils/user/merge-premium");
 
-const logger = createScopedLogger("test");
+const logger = createTestLogger();
 
 describe("mergeAccount", () => {
   beforeEach(() => {
@@ -24,20 +20,20 @@ describe("mergeAccount", () => {
       const accountId = "account-id";
 
       prisma.emailAccount.findMany.mockResolvedValue([
-        getMockEmailAccountSelect({
+        {
           id: "email-1",
           email: "primary@test.com",
           accountId,
-        }),
-        getMockEmailAccountSelect({
+        },
+        {
           id: "email-2",
           email: "secondary@test.com",
           accountId: "other-account",
-        }),
-      ]);
+        },
+      ] as any);
 
       prisma.user.findUnique.mockResolvedValue(
-        getMockUserSelect({ email: "primary@test.com" }),
+        getMockUserSelect({ email: "primary@test.com" }) as any,
       );
 
       prisma.account.update.mockResolvedValue({} as any);
@@ -55,13 +51,22 @@ describe("mergeAccount", () => {
       });
 
       expect(result).toBe("partial_reassign");
-      expect(prisma.$transaction).toHaveBeenCalledWith(
-        expect.arrayContaining([
-          expect.anything(), // account update
-          expect.anything(), // email account update
-          expect.anything(), // user update (primary email change)
-        ]),
-      );
+      expect(prisma.account.update).toHaveBeenCalledWith({
+        where: { id: accountId },
+        data: { userId: targetUserId },
+      });
+      expect(prisma.emailAccount.update).toHaveBeenCalledWith({
+        where: { accountId },
+        data: {
+          userId: targetUserId,
+          name: "Test User",
+          email: "primary@test.com",
+        },
+      });
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: sourceUserId },
+        data: { email: "secondary@test.com" },
+      });
       expect(prisma.user.delete).not.toHaveBeenCalled();
     });
 
@@ -71,20 +76,20 @@ describe("mergeAccount", () => {
       const accountId = "account-id";
 
       prisma.emailAccount.findMany.mockResolvedValue([
-        getMockEmailAccountSelect({
+        {
           id: "email-1",
           email: "primary@test.com",
           accountId: "other-account",
-        }),
-        getMockEmailAccountSelect({
+        },
+        {
           id: "email-2",
           email: "secondary@test.com",
           accountId,
-        }),
-      ]);
+        },
+      ] as any);
 
       prisma.user.findUnique.mockResolvedValue(
-        getMockUserSelect({ email: "primary@test.com" }),
+        getMockUserSelect({ email: "primary@test.com" }) as any,
       );
 
       prisma.account.update.mockResolvedValue({} as any);
@@ -101,17 +106,19 @@ describe("mergeAccount", () => {
       });
 
       expect(result).toBe("partial_reassign");
-      expect(prisma.$transaction).toHaveBeenCalledWith(
-        expect.arrayContaining([
-          expect.anything(), // account update
-          expect.anything(), // email account update
-        ]),
-      );
-      expect(prisma.$transaction).toHaveBeenCalledWith(
-        expect.not.arrayContaining([
-          expect.objectContaining({ model: "user" }),
-        ]),
-      );
+      expect(prisma.account.update).toHaveBeenCalledWith({
+        where: { id: accountId },
+        data: { userId: targetUserId },
+      });
+      expect(prisma.emailAccount.update).toHaveBeenCalledWith({
+        where: { accountId },
+        data: {
+          userId: targetUserId,
+          name: "Test User",
+          email: "secondary@test.com",
+        },
+      });
+      expect(prisma.user.update).not.toHaveBeenCalled();
       expect(prisma.user.delete).not.toHaveBeenCalled();
     });
   });
@@ -123,15 +130,15 @@ describe("mergeAccount", () => {
       const accountId = "account-id";
 
       prisma.emailAccount.findMany.mockResolvedValue([
-        getMockEmailAccountSelect({
+        {
           id: "email-1",
           email: "only@test.com",
           accountId,
-        }),
-      ]);
+        },
+      ] as any);
 
       prisma.user.findUnique.mockResolvedValue(
-        getMockUserSelect({ email: "only@test.com" }),
+        getMockUserSelect({ email: "only@test.com" }) as any,
       );
 
       prisma.account.update.mockResolvedValue({} as any);
@@ -157,14 +164,20 @@ describe("mergeAccount", () => {
       expect(transferPremiumDuringMerge).toHaveBeenCalledWith({
         sourceUserId,
         targetUserId,
+        logger,
       });
-      expect(prisma.$transaction).toHaveBeenCalledWith(
-        expect.arrayContaining([
-          expect.anything(), // account update
-          expect.anything(), // email account update
-          expect.anything(), // user delete
-        ]),
-      );
+      expect(prisma.account.update).toHaveBeenCalledWith({
+        where: { id: accountId },
+        data: { userId: targetUserId },
+      });
+      expect(prisma.emailAccount.update).toHaveBeenCalledWith({
+        where: { accountId },
+        data: {
+          userId: targetUserId,
+          name: "Test User",
+          email: "only@test.com",
+        },
+      });
       expect(prisma.user.delete).toHaveBeenCalledWith({
         where: { id: sourceUserId },
       });

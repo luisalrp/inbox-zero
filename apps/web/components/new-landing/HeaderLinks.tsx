@@ -22,8 +22,8 @@ import {
 
 const navigation = [
   { name: "Enterprise", href: "/enterprise" },
-  { name: "Open Source", href: "/github", target: "_blank" as const },
-  { name: "Pricing", href: "/#pricing" },
+  { name: "Case Studies", href: "/case-studies" },
+  { name: "Pricing", href: "/pricing" },
 ];
 
 const useCases = [
@@ -69,7 +69,7 @@ const useCases = [
   },
   {
     title: "Customer Support",
-    href: "/support",
+    href: "/customer-support",
     description: "Deliver faster support with AI-powered responses",
     icon: HeadphonesIcon,
     iconColor: "text-new-orange-600",
@@ -128,8 +128,6 @@ export function HeaderLinks() {
               >
                 <Link
                   href={item.href}
-                  target={item.target}
-                  prefetch={item.target !== "_blank"}
                   className="text-sm font-semibold font-geist leading-6 text-gray-900"
                 >
                   {item.name}
@@ -155,6 +153,7 @@ function EnhancedListItem({
   ...props
 }: React.ComponentPropsWithoutRef<"li"> & {
   href: string;
+  // biome-ignore lint/suspicious/noExplicitAny: existing loose external shape
   icon: React.ComponentType<any>;
   iconColor: string;
   gradient: string;

@@ -4,9 +4,21 @@ import { useAccount } from "@/providers/EmailAccountProvider";
 
 // Makes sure that we have an email account id before fetching
 // Otherwise the backend will return an error
+// biome-ignore lint/suspicious/noExplicitAny: existing loose external shape
 export function useSWRWithEmailAccount<Data = any, Error = any>(url: string) {
   const { emailAccountId } = useAccount();
   return useSWR<Data, Error>(emailAccountId ? url : null);
+}
+
+// Routes scoped by the authenticated email account need the account in the
+// cache key, or an account switch would serve another account's data.
+export function getAccountScopedKey(
+  path: string,
+  emailAccountId?: string | null,
+) {
+  if (emailAccountId === undefined) return path;
+
+  return emailAccountId ? ([path, emailAccountId] as const) : null;
 }
 
 type NormalizedError = { error: string };

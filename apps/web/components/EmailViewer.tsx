@@ -17,29 +17,26 @@ export function EmailViewer() {
     useDisplayedEmail();
 
   const hideEmail = useCallback(() => showEmail(null), [showEmail]);
+  const supportsViewerReplies = isGoogleProvider(provider);
 
   return (
     <Sheet open={!!threadId} onOpenChange={hideEmail}>
       <SheetContent
         side="right"
         size="5xl"
-        className="overflow-y-auto bg-slate-100 p-0"
+        className="overflow-y-auto bg-background p-6"
         overlay="transparent"
       >
-        {isGoogleProvider(provider) ? (
-          threadId && (
-            <ThreadContent
-              threadId={threadId}
-              showReplyButton={showReplyButton}
-              autoOpenReplyForMessageId={autoOpenReplyForMessageId ?? undefined}
-            />
-          )
-        ) : (
-          <div className="flex h-full items-center justify-center">
-            <p className="text-sm text-muted-foreground">
-              This feature isn't enabled for Outlook.
-            </p>
-          </div>
+        {threadId && (
+          <ThreadContent
+            threadId={threadId}
+            showReplyButton={supportsViewerReplies && showReplyButton}
+            autoOpenReplyForMessageId={
+              supportsViewerReplies
+                ? (autoOpenReplyForMessageId ?? undefined)
+                : undefined
+            }
+          />
         )}
       </SheetContent>
     </Sheet>

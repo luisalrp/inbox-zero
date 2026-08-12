@@ -2,15 +2,16 @@
 
 import { DomainIcon } from "@/components/charts/DomainIcon";
 import { cn } from "@/utils";
+import { extractDomainFromEmail } from "@/utils/email";
 
 interface HorizontalBarChartProps {
+  className?: string;
   data: Array<{
     name: string;
     value: number;
     href?: string;
     target?: string;
   }>;
-  className?: string;
 }
 
 export function HorizontalBarChart({
@@ -23,9 +24,7 @@ export function HorizontalBarChart({
     <div className={cn("space-y-2", className)}>
       {data.map((item) => {
         const widthPercentage = (item.value / maxValue) * 100;
-        const domain = item.name.includes("@")
-          ? item.name.split("@")[1]
-          : item.name;
+        const domain = extractDomainFromEmail(item.name) || item.name;
 
         return (
           <div
@@ -39,7 +38,7 @@ export function HorizontalBarChart({
                   style={{ width: `${widthPercentage}%` }}
                 />
                 <div className="flex items-center gap-2">
-                  <DomainIcon domain={domain} />
+                  <DomainIcon domain={domain} variant="circular" />
                   {item.href ? (
                     <a
                       href={item.href}

@@ -1,26 +1,34 @@
-import { type NextRequest, NextResponse } from "next/server";
-import { createScopedLogger } from "@/utils/logger";
+import { NextResponse } from "next/server";
 import { withError } from "@/utils/middleware";
 import { SafeError } from "@/utils/error";
 import {
   getMcpPkceCookieName,
   getMcpStateCookieName,
-  parseOAuthState,
   getMcpOAuthStateType,
+  validateSignedOAuthState,
 } from "@/utils/oauth/state";
 import { prefixPath } from "@/utils/path";
 import prisma from "@/utils/prisma";
-import { getIntegration } from "@/utils/mcp/integrations";
+import { findIntegration } from "@/utils/mcp/integrations";
 import { syncMcpTools } from "@/utils/mcp/sync-tools";
 import { handleOAuthCallback } from "@/utils/mcp/oauth";
 import { env } from "@/env";
+import {
+  claimOAuthCodeAndWait,
+  clearOAuthCode,
+  isOAuthCodeStoreConfigured,
+  setOAuthCodeResult,
+  type OAuthCodeResult,
+} from "@/utils/redis/oauth-code";
+import type { Logger } from "@/utils/logger";
 
-const logger = createScopedLogger("mcp/callback");
+const CALLBACK_RESULT_TTL_SECONDS = 600;
 
-export const GET = withError(async (request: NextRequest, { params }) => {
+export const GET = withError("mcp/callback", async (request, { params }) => {
+  const logger = request.logger;
   const { integration } = await params;
 
-  const integrationConfig = getIntegration(integration);
+  const integrationConfig = findIntegration(integration);
 
   if (!integrationConfig) {
     throw new SafeError(`Integration ${integration} not found`);
@@ -71,13 +79,22 @@ export const GET = withError(async (request: NextRequest, { params }) => {
     return buildRedirectResponse(redirectUrl);
   }
 
-  if (!storedState || !receivedState || storedState !== receivedState) {
+  const stateValidation = validateSignedOAuthState<{
+    userId: string;
+    emailAccountId: string;
+    type: string;
+  }>({
+    receivedState,
+    storedState,
+  });
+  if (!stateValidation.success) {
     logger.warn("Invalid state during MCP callback", {
       integration,
       receivedState,
       hasStoredState: !!storedState,
+      error: stateValidation.error,
     });
-    redirectUrl.searchParams.set("error", "invalid_state");
+    redirectUrl.searchParams.set("error", stateValidation.error);
     return buildRedirectResponse(redirectUrl);
   }
 
@@ -87,16 +104,14 @@ export const GET = withError(async (request: NextRequest, { params }) => {
     return buildRedirectResponse(redirectUrl);
   }
 
-  let decodedState: {
-    userId: string;
-    emailAccountId: string;
-    type: string;
-    nonce: string;
-  };
-  try {
-    decodedState = parseOAuthState(storedState);
-  } catch (error) {
-    logger.error("Failed to decode state", { error, integration });
+  const decodedState = stateValidation.state;
+
+  if (
+    typeof decodedState.userId !== "string" ||
+    typeof decodedState.emailAccountId !== "string" ||
+    typeof decodedState.type !== "string"
+  ) {
+    logger.error("Failed to decode state", { integration });
     redirectUrl.searchParams.set("error", "invalid_state_format");
     return buildRedirectResponse(redirectUrl);
   }
@@ -138,6 +153,39 @@ export const GET = withError(async (request: NextRequest, { params }) => {
     return buildRedirectResponse(redirectUrl);
   }
 
+  if (isOAuthCodeStoreConfigured()) {
+    const claim = await claimOAuthCodeAndWait(code);
+    if (claim.status === "error" && claim.stage === "claim") {
+      logger.warn("MCP OAuth callback deduplication unavailable", {
+        error: claim.error,
+        integration,
+      });
+    }
+
+    if (claim.status === "success") {
+      logger.info(
+        claim.waited
+          ? "Reusing in-flight MCP OAuth callback result"
+          : "Reusing completed MCP OAuth callback",
+        { integration },
+      );
+      applyCallbackResult(redirectUrl, claim.result);
+      return buildRedirectResponse(redirectUrl);
+    }
+
+    if (
+      claim.status === "timeout" ||
+      (claim.status === "error" && claim.stage === "wait")
+    ) {
+      logger.warn("MCP OAuth callback result is still pending", {
+        error: claim.status === "error" ? claim.error : undefined,
+        integration,
+      });
+      redirectUrl.searchParams.set("pending", integration);
+      return buildRedirectResponse(redirectUrl);
+    }
+  }
+
   try {
     // Exchange authorization code for tokens and save to DB
     const redirectUri = `${env.NEXT_PUBLIC_BASE_URL}/api/mcp/${integration}/callback`;
@@ -157,7 +205,11 @@ export const GET = withError(async (request: NextRequest, { params }) => {
     });
 
     try {
-      const syncResult = await syncMcpTools(integration, emailAccountId);
+      const syncResult = await syncMcpTools(
+        integration,
+        emailAccountId,
+        logger,
+      );
       logger.info("Auto-synced tools after connection", {
         integration,
         emailAccountId,
@@ -169,11 +221,26 @@ export const GET = withError(async (request: NextRequest, { params }) => {
         integration,
         emailAccountId,
       });
+      redirectUrl.searchParams.set("error", "tool_sync_failed");
+      await cacheCallbackResult({
+        code,
+        integration,
+        logger,
+        params: { error: "tool_sync_failed" },
+      });
+      return buildRedirectResponse(redirectUrl);
     }
 
     redirectUrl.searchParams.set("connected", integration);
+    await cacheCallbackResult({
+      code,
+      integration,
+      logger,
+      params: { connected: integration },
+    });
     return buildRedirectResponse(redirectUrl);
   } catch (error) {
+    if (isOAuthCodeStoreConfigured()) await clearOAuthCode(code);
     logger.error("Error during MCP token exchange", {
       error,
       integration,
@@ -184,3 +251,34 @@ export const GET = withError(async (request: NextRequest, { params }) => {
     return buildRedirectResponse(redirectUrl);
   }
 });
+
+function applyCallbackResult(redirectUrl: URL, result: OAuthCodeResult) {
+  for (const [key, value] of Object.entries(result.params)) {
+    redirectUrl.searchParams.set(key, value);
+  }
+}
+
+async function cacheCallbackResult({
+  code,
+  integration,
+  logger,
+  params,
+}: {
+  code: string;
+  integration: string;
+  logger: Logger;
+  params: Record<string, string>;
+}) {
+  if (!isOAuthCodeStoreConfigured()) return;
+
+  try {
+    await setOAuthCodeResult(code, params, {
+      ttlSeconds: CALLBACK_RESULT_TTL_SECONDS,
+    });
+  } catch (error) {
+    logger.warn("Failed to publish MCP OAuth callback result after retries", {
+      error,
+      integration,
+    });
+  }
+}

@@ -12,7 +12,7 @@ import { aiAnalyzeLabelOptimization } from "@/utils/ai/report/analyze-label-opti
 import { aiGenerateActionableRecommendations } from "@/utils/ai/report/generate-actionable-recommendations";
 import { actionClient } from "@/utils/actions/safe-action";
 import { getEmailAccountWithAi } from "@/utils/user/get";
-import { getGmailClientForEmail } from "@/utils/account";
+import { getGmailClientForEmail } from "@/utils/email-account-client";
 import { getEmailForLLM } from "@/utils/get-email-from-message";
 import type { Logger } from "@/utils/logger";
 import { getGmailSignatures } from "@/utils/gmail/signature-settings";
@@ -22,9 +22,9 @@ export type EmailReportData = Awaited<ReturnType<typeof getEmailReportData>>;
 export const generateReportAction = actionClient
   .metadata({ name: "generateReport" })
   .inputSchema(z.object({}))
-  .action(async ({ ctx: { emailAccountId, logger } }) => {
-    return getEmailReportData({ emailAccountId, logger });
-  });
+  .action(async ({ ctx: { emailAccountId, logger } }) =>
+    getEmailReportData({ emailAccountId, logger }),
+  );
 
 async function getEmailReportData({
   emailAccountId,
@@ -66,6 +66,7 @@ async function getEmailReportData({
 
   const gmail = await getGmailClientForEmail({
     emailAccountId: emailAccount.id,
+    logger,
   });
 
   const gmailLabels = await fetchGmailLabels(gmail, logger);
@@ -197,7 +198,7 @@ async function fetchGmailLabels(
           } catch (error) {
             logger.warn("Failed to get details for label", {
               labelName: label.name,
-              error: error instanceof Error ? error.message : String(error),
+              error,
             });
             return {
               ...label,
@@ -216,9 +217,7 @@ async function fetchGmailLabels(
 
     return sortedLabels;
   } catch (error) {
-    logger.warn("Failed to fetch Gmail labels", {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    logger.warn("Failed to fetch Gmail labels", { error });
     return [];
   }
 }
@@ -234,9 +233,7 @@ async function fetchGmailSignature(
 
     return defaultSignature?.signature || "";
   } catch (error) {
-    logger.warn("Failed to fetch Gmail signature", {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    logger.warn("Failed to fetch Gmail signature", { error });
     return "";
   }
 }

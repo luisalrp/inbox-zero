@@ -6,8 +6,12 @@ import { sendEmailBody } from "@/utils/gmail/mail";
 import { actionClient } from "@/utils/actions/safe-action";
 import { SafeError } from "@/utils/error";
 import { createEmailProvider } from "@/utils/email/provider";
+import {
+  removeThreadLabelBody,
+  unarchiveThreadBody,
+  untrashThreadBody,
+} from "@/utils/actions/mail.validation";
 
-// do not return functions to the client or we'll get an error
 const isStatusOk = (status: number) => status >= 200 && status < 300;
 
 export const archiveThreadAction = actionClient
@@ -26,11 +30,39 @@ export const archiveThreadAction = actionClient
         logger,
       });
 
-      await emailProvider.archiveThreadWithLabel(
-        threadId,
-        emailAccount.email,
-        labelId,
-      );
+      try {
+        await emailProvider.archiveThreadWithLabel(
+          threadId,
+          emailAccount.email,
+          labelId,
+        );
+      } catch (error) {
+        logger.error("Failed to archive thread", { error });
+        throw new SafeError("Failed to archive email. Please try again.");
+      }
+    },
+  );
+
+export const unarchiveThreadAction = actionClient
+  .metadata({ name: "unarchiveThread" })
+  .inputSchema(unarchiveThreadBody)
+  .action(
+    async ({
+      ctx: { emailAccountId, provider, logger },
+      parsedInput: { threadId },
+    }) => {
+      const emailProvider = await createEmailProvider({
+        emailAccountId,
+        provider,
+        logger,
+      });
+
+      try {
+        await emailProvider.unarchiveThread(threadId);
+      } catch (error) {
+        logger.error("Failed to unarchive thread", { error });
+        throw new SafeError("Failed to unarchive email. Please try again.");
+      }
     },
   );
 
@@ -48,7 +80,35 @@ export const trashThreadAction = actionClient
         logger,
       });
 
-      await emailProvider.trashThread(threadId, emailAccount.email, "user");
+      try {
+        await emailProvider.trashThread(threadId, emailAccount.email, "user");
+      } catch (error) {
+        logger.error("Failed to trash thread", { error });
+        throw new SafeError("Failed to delete email. Please try again.");
+      }
+    },
+  );
+
+export const untrashThreadAction = actionClient
+  .metadata({ name: "untrashThread" })
+  .inputSchema(untrashThreadBody)
+  .action(
+    async ({
+      ctx: { emailAccountId, provider, logger },
+      parsedInput: { threadId },
+    }) => {
+      const emailProvider = await createEmailProvider({
+        emailAccountId,
+        provider,
+        logger,
+      });
+
+      try {
+        await emailProvider.untrashThread(threadId);
+      } catch (error) {
+        logger.error("Failed to untrash thread", { error });
+        throw new SafeError("Failed to restore email. Please try again.");
+      }
     },
   );
 
@@ -66,7 +126,37 @@ export const markReadThreadAction = actionClient
         logger,
       });
 
-      await emailProvider.markReadThread(threadId, read);
+      try {
+        await emailProvider.markReadThread(threadId, read);
+      } catch (error) {
+        logger.error("Failed to mark thread read state", { error });
+        throw new SafeError(
+          `Failed to mark email as ${read ? "read" : "unread"}. Please try again.`,
+        );
+      }
+    },
+  );
+
+export const removeThreadLabelAction = actionClient
+  .metadata({ name: "removeThreadLabel" })
+  .inputSchema(removeThreadLabelBody)
+  .action(
+    async ({
+      ctx: { emailAccountId, provider, logger },
+      parsedInput: { threadId, labelId },
+    }) => {
+      const emailProvider = await createEmailProvider({
+        emailAccountId,
+        provider,
+        logger,
+      });
+
+      try {
+        await emailProvider.removeThreadLabel(threadId, labelId);
+      } catch (error) {
+        logger.error("Failed to remove thread label", { error });
+        throw new SafeError("Failed to remove label. Please try again.");
+      }
     },
   );
 
@@ -117,10 +207,14 @@ export const createFilterAction = actionClient
         addLabelIds: [gmailLabelId],
       });
 
-      if (!isStatusOk(res.status))
+      if (!isStatusOk(res.status)) {
+        logger.error("Failed to create filter", {
+          from,
+          gmailLabelId,
+          status: res.status,
+        });
         throw new SafeError("Failed to create filter");
-
-      return res;
+      }
     },
   );
 
@@ -140,8 +234,13 @@ export const deleteFilterAction = actionClient
 
       const res = await emailProvider.deleteFilter(id);
 
-      if (!isStatusOk(res.status))
+      if (!isStatusOk(res.status)) {
+        logger.error("Failed to delete filter", {
+          filterId: id,
+          status: res.status,
+        });
         throw new SafeError("Failed to delete filter");
+      }
     },
   );
 

@@ -7,7 +7,7 @@ import { Button } from "@/components/Button";
 import { Input } from "@/components/Input";
 import { activateLicenseKeyAction } from "@/utils/actions/premium";
 import { AlertBasic } from "@/components/Alert";
-import { usePremium } from "@/components/PremiumAlert";
+import { usePremium } from "@/hooks/usePremium";
 import { toastError, toastSuccess } from "@/components/Toast";
 import type { ActivateLicenseKeyOptions } from "@/utils/actions/premium.validation";
 import { PageWrapper } from "@/components/PageWrapper";
@@ -23,7 +23,7 @@ export default function LicensePage(props: {
 
   return (
     <PageWrapper>
-      <PageHeader title="Activate your license" description="" />
+      <PageHeader title="Activate your license" />
 
       <div className="max-w-2xl py-4">
         {premium?.lemonLicenseKey && (

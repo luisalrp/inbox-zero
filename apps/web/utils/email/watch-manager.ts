@@ -1,10 +1,19 @@
 import prisma from "@/utils/prisma";
-import { hasAiAccess } from "@/utils/premium";
-import { createScopedLogger } from "@/utils/logger";
+import {
+  getPremiumUserFilter,
+  getUserTier,
+  hasAiAccess,
+  premiumEntitlementSelect,
+} from "@/utils/premium";
+import type { Logger } from "@/utils/logger";
 import { createEmailProvider } from "@/utils/email/provider";
-import { watchEmails } from "@/app/api/watch/controller";
-
-const logger = createScopedLogger("email/watch-manager");
+import { captureException, isInvalidGrantError } from "@/utils/error";
+import { cleanupInvalidTokens } from "@/utils/auth/cleanup-invalid-tokens";
+import type { EmailProvider } from "@/utils/email/types";
+import { createManagedOutlookSubscription } from "@/utils/outlook/subscription-manager";
+import { isMicrosoftProvider } from "@/utils/email/provider-types";
+import { logErrorWithDedupe } from "@/utils/log-error-with-dedupe";
+import { clearWatchLapsedErrorIfResolved } from "@/utils/error-messages";
 
 export type WatchEmailAccountResult =
   | {
@@ -21,25 +30,21 @@ export type WatchEmailAccountResult =
 
 export async function ensureEmailAccountsWatched({
   userIds,
+  logger,
 }: {
   userIds: string[] | null;
+  logger: Logger;
 }): Promise<WatchEmailAccountResult[]> {
   const emailAccounts = await getEmailAccountsToWatch(userIds);
-  return await watchEmailAccounts(emailAccounts);
+  return await watchEmailAccounts(emailAccounts, logger);
 }
 
 async function getEmailAccountsToWatch(userIds: string[] | null) {
   return prisma.emailAccount.findMany({
     where: {
       ...(userIds ? { userId: { in: userIds } } : {}),
-      user: {
-        premium: {
-          OR: [
-            { lemonSqueezyRenewsAt: { gt: new Date() } },
-            { stripeSubscriptionStatus: { in: ["active", "trialing"] } },
-          ],
-        },
-      },
+      ...getPremiumUserFilter(),
+      account: { disconnectedAt: null },
     },
     select: {
       id: true,
@@ -52,6 +57,7 @@ async function getEmailAccountsToWatch(userIds: string[] | null) {
           access_token: true,
           refresh_token: true,
           expires_at: true,
+          disconnectedAt: true,
         },
       },
       user: {
@@ -59,11 +65,7 @@ async function getEmailAccountsToWatch(userIds: string[] | null) {
           id: true,
           aiApiKey: true,
           premium: {
-            select: {
-              tier: true,
-              lemonSqueezyRenewsAt: true,
-              stripeSubscriptionStatus: true,
-            },
+            select: premiumEntitlementSelect,
           },
         },
       },
@@ -76,6 +78,7 @@ async function getEmailAccountsToWatch(userIds: string[] | null) {
 
 async function watchEmailAccounts(
   emailAccounts: Awaited<ReturnType<typeof getEmailAccountsToWatch>>,
+  logger: Logger,
 ): Promise<WatchEmailAccountResult[]> {
   if (!emailAccounts.length) return [];
 
@@ -85,18 +88,25 @@ async function watchEmailAccounts(
 
   for (const emailAccount of emailAccounts) {
     try {
-      const result = await watchEmailAccount(emailAccount);
+      const log = logger.with({
+        emailAccountId: emailAccount.id,
+        email: emailAccount.email,
+        provider: emailAccount.account.provider,
+      });
+      const result = await watchEmailAccount(emailAccount, log);
       if (result) results.push(result);
     } catch (error) {
       if (error instanceof Error) {
         const warn = [
-          "invalid_grant",
           "Mail service not enabled",
           "Insufficient Permission",
           "AADSTS7000215", // Raw Azure AD error for invalid client secret (old tokens after secret rotation)
         ];
 
-        if (warn.some((w) => error.message.includes(w))) {
+        if (
+          isInvalidGrantError(error) ||
+          warn.some((w) => error.message.includes(w))
+        ) {
           logger.warn("Not watching emails for user", {
             email: emailAccount.email,
             error,
@@ -105,10 +115,7 @@ async function watchEmailAccounts(
         }
       }
 
-      logger.error("Error for user", {
-        email: emailAccount.email,
-        error,
-      });
+      logger.error("Error for user", { error });
       results.push({
         emailAccountId: emailAccount.id,
         status: "error",
@@ -124,24 +131,23 @@ async function watchEmailAccounts(
 
 async function watchEmailAccount(
   emailAccount: Awaited<ReturnType<typeof getEmailAccountsToWatch>>[number],
+  logger: Logger,
 ): Promise<WatchEmailAccountResult | null> {
   const { account, user, watchEmailsExpirationDate } = emailAccount;
 
   const userHasAiAccess = hasAiAccess(
-    user.premium?.tier || null,
-    user.aiApiKey,
+    getUserTier(user.premium),
+    !!user.aiApiKey,
   );
 
   if (!userHasAiAccess) {
-    logger.info("User does not have access to AI or cold email", {
-      email: emailAccount.email,
-    });
+    logger.info("User does not have access to AI or cold email");
 
     if (
       watchEmailsExpirationDate &&
       new Date(watchEmailsExpirationDate) < new Date()
     ) {
-      await prisma.emailAccount.update({
+      await prisma.emailAccount.updateMany({
         where: { id: emailAccount.id },
         data: {
           watchEmailsExpirationDate: null,
@@ -154,9 +160,7 @@ async function watchEmailAccount(
   }
 
   if (!account?.access_token || !account?.refresh_token) {
-    logger.info("User has no access token or refresh token", {
-      email: emailAccount.email,
-    });
+    logger.info("User has no access token or refresh token");
 
     return {
       emailAccountId: emailAccount.id,
@@ -165,11 +169,7 @@ async function watchEmailAccount(
     };
   }
 
-  logger.info("Watching emails for account", {
-    emailAccountId: emailAccount.id,
-    email: emailAccount.email,
-    provider: account.provider,
-  });
+  logger.info("Watching emails for account");
 
   const provider = await createEmailProvider({
     emailAccountId: emailAccount.id,
@@ -180,21 +180,46 @@ async function watchEmailAccount(
   const result = await watchEmails({
     emailAccountId: emailAccount.id,
     provider,
+    logger,
   });
 
   if (!result.success) {
-    logger.error("Failed to watch emails for account", {
-      emailAccountId: emailAccount.id,
-      email: emailAccount.email,
+    await logErrorWithDedupe({
+      logger,
+      message: "Failed to watch emails for account",
       error: result.error,
+      dedupeKeyParts: {
+        scope: "watch/all",
+        emailAccountId: emailAccount.id,
+        operation: "watch-email-account",
+      },
+      ttlSeconds: 15 * 60,
+      summaryIntervalSeconds: 5 * 60,
     });
 
     return {
       emailAccountId: emailAccount.id,
       status: "error",
       message: "Failed to set up watch for this account.",
-      errorDetails: result.error,
+      errorDetails:
+        result.error instanceof Error
+          ? result.error.message
+          : String(result.error),
     };
+  }
+
+  const wasLapsed =
+    !watchEmailsExpirationDate ||
+    new Date(watchEmailsExpirationDate) < new Date();
+
+  if (wasLapsed) {
+    // The watch is healthy again, so clear the lapse error. This lets us
+    // notify again if the account lapses in the future.
+    await clearWatchLapsedErrorIfResolved({
+      userId: user.id,
+      emailAccountId: emailAccount.id,
+      logger,
+    });
   }
 
   return {
@@ -202,4 +227,99 @@ async function watchEmailAccount(
     status: "success",
     expirationDate: result.expirationDate,
   };
+}
+
+async function watchEmails({
+  emailAccountId,
+  provider,
+  logger,
+}: {
+  emailAccountId: string;
+  provider: EmailProvider;
+  logger: Logger;
+}): Promise<
+  { success: true; expirationDate: Date } | { success: false; error: unknown }
+> {
+  logger.info("Watching emails");
+
+  try {
+    if (isMicrosoftProvider(provider.name)) {
+      const result = await createManagedOutlookSubscription({
+        emailAccountId,
+        logger,
+      });
+
+      if (result)
+        return { success: true, expirationDate: result.expirationDate };
+    } else {
+      const result = await provider.watchEmails();
+
+      if (result) {
+        await prisma.emailAccount.update({
+          where: { id: emailAccountId },
+          data: { watchEmailsExpirationDate: result.expirationDate },
+        });
+        return { success: true, expirationDate: result.expirationDate };
+      }
+    }
+
+    const error = new Error("Provider returned no result for watch setup");
+    return { success: false, error };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    const isInsufficientPermissions = errorMessage.includes(
+      "Request had insufficient authentication scopes.",
+    );
+    const isInvalidGrant = isInvalidGrantError(error);
+
+    if (isInsufficientPermissions || isInvalidGrant) {
+      logger.warn("Auth failure while watching inbox - cleaning up tokens", {
+        error,
+      });
+      await cleanupInvalidTokens({
+        emailAccountId,
+        reason: isInvalidGrant ? "invalid_grant" : "insufficient_permissions",
+        logger,
+      });
+    } else {
+      captureException(error, { emailAccountId });
+    }
+
+    return { success: false, error };
+  }
+}
+
+export async function unwatchEmails({
+  emailAccountId,
+  provider,
+  subscriptionId,
+  logger,
+}: {
+  emailAccountId: string;
+  provider: EmailProvider;
+  subscriptionId?: string | null;
+  logger: Logger;
+}) {
+  try {
+    logger.info("Unwatching emails");
+
+    await provider.unwatchEmails(subscriptionId || undefined);
+  } catch (error) {
+    if (isInvalidGrantError(error)) {
+      logger.warn("Error unwatching emails, invalid grant");
+    } else {
+      logger.error("Error unwatching emails", { error });
+      captureException(error, { emailAccountId });
+    }
+  }
+
+  // Clear the watch data regardless of provider
+  await prisma.emailAccount.updateMany({
+    where: { id: emailAccountId },
+    data: {
+      watchEmailsExpirationDate: null,
+      watchEmailsSubscriptionId: null,
+    },
+  });
 }

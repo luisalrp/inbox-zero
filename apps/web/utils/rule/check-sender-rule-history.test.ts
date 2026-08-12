@@ -2,7 +2,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { checkSenderRuleHistory } from "@/utils/rule/check-sender-rule-history";
 import prisma from "@/utils/__mocks__/prisma";
 import { createMockEmailProvider } from "@/utils/__mocks__/email-provider";
-import { getMockMessage, getMockExecutedRule } from "@/__tests__/helpers";
+import {
+  getMockExecutedRule,
+  getMockMessage,
+  createTestLogger,
+} from "@/__tests__/helpers";
+
+const logger = createTestLogger();
 
 vi.mock("@/utils/prisma");
 
@@ -23,6 +29,7 @@ describe("checkSenderRuleHistory", () => {
       emailAccountId: "test-email-account",
       from: "test@example.com",
       provider: mockProvider,
+      logger,
     });
 
     expect(result.totalEmails).toBe(0);
@@ -94,6 +101,7 @@ describe("checkSenderRuleHistory", () => {
       emailAccountId: "test-email-account",
       from: "test@example.com",
       provider: mockProvider,
+      logger,
     });
 
     expect(result.totalEmails).toBe(3);
@@ -178,6 +186,7 @@ describe("checkSenderRuleHistory", () => {
       emailAccountId: "test-email-account",
       from: "test@example.com",
       provider: mockProvider,
+      logger,
     });
 
     expect(result.totalEmails).toBe(3);
@@ -220,6 +229,7 @@ describe("checkSenderRuleHistory", () => {
       emailAccountId: "test-email-account",
       from: "test@example.com",
       provider: mockProvider,
+      logger,
     });
 
     expect(result.totalEmails).toBe(2); // 2 messages from sender
@@ -239,6 +249,7 @@ describe("checkSenderRuleHistory", () => {
         emailAccountId: "test-email-account",
         from: "test@example.com",
         provider: mockProvider,
+        logger,
       }),
     ).rejects.toThrow("Failed to fetch messages from provider");
   });
@@ -261,6 +272,7 @@ describe("checkSenderRuleHistory", () => {
         emailAccountId: "test-email-account",
         from: "test@example.com",
         provider: mockProvider,
+        logger,
       }),
     ).rejects.toThrow("Database connection failed");
   });
@@ -275,6 +287,7 @@ describe("checkSenderRuleHistory", () => {
       emailAccountId: "test-email-account",
       from: "John Doe <john@example.com>", // Complex from field
       provider: mockProvider,
+      logger,
     });
 
     expect(mockProvider.getMessagesFromSender).toHaveBeenCalledWith({
@@ -310,6 +323,7 @@ describe("checkSenderRuleHistory", () => {
       emailAccountId: "test-email-account",
       from: "test@example.com",
       provider: mockProvider,
+      logger,
     });
 
     expect(result.totalEmails).toBe(2);
@@ -356,6 +370,7 @@ describe("checkSenderRuleHistory", () => {
       emailAccountId: "test-email-account",
       from: "test@example.com",
       provider: mockProvider,
+      logger,
     });
 
     expect(result.totalEmails).toBe(3);
@@ -391,6 +406,7 @@ describe("checkSenderRuleHistory", () => {
       emailAccountId: "test-email-account",
       from: "test@example.com",
       provider: mockProvider,
+      logger,
     });
 
     expect(result.totalEmails).toBe(2);

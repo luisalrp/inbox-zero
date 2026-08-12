@@ -8,17 +8,16 @@
  * 1. Set TEST_OUTLOOK_EMAIL env var to your Outlook email
  */
 
-import { describe, test, expect, beforeAll, vi } from "vitest";
+import { describe, test, expect, beforeAll } from "vitest";
 import prisma from "@/utils/prisma";
-import { microsoftAvailabilityProvider } from "@/utils/calendar/providers/microsoft-availability";
+import { createMicrosoftAvailabilityProvider } from "@/utils/calendar/providers/microsoft-availability";
+import { createScopedLogger } from "@/utils/logger";
 
 // ============================================
 // TEST DATA - SET VIA ENVIRONMENT VARIABLES
 // ============================================
 const RUN_E2E_TESTS = process.env.RUN_E2E_TESTS;
 const TEST_OUTLOOK_EMAIL = process.env.TEST_OUTLOOK_EMAIL;
-
-vi.mock("server-only", () => ({}));
 
 describe.skipIf(!RUN_E2E_TESTS)("Outlook Calendar Integration Tests", () => {
   let calendarConnection: {
@@ -132,10 +131,14 @@ describe.skipIf(!RUN_E2E_TESTS)("Outlook Calendar Integration Tests", () => {
       );
       console.log(`   ⏰ Time range: ${timeMin} to ${timeMax}`);
       console.log(
-        `   📋 Calendar IDs (${enabledCalendars.length}): ${enabledCalendars.map((c) => `${c.calendarId.substring(0, 20)}...`).join(", ")}`,
+        `   📋 Calendar IDs (${enabledCalendars.length}): ${enabledCalendars.map((c) => `${c.calendarId.slice(0, 20)}...`).join(", ")}`,
       );
 
       // Use the Microsoft availability provider
+      const logger = createScopedLogger("test/microsoft-calendar");
+      const microsoftAvailabilityProvider =
+        createMicrosoftAvailabilityProvider(logger);
+
       const busyPeriods = await microsoftAvailabilityProvider.fetchBusyPeriods({
         accessToken: calendarConnection.accessToken,
         refreshToken: calendarConnection.refreshToken,

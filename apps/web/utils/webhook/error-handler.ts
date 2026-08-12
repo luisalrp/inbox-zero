@@ -1,6 +1,8 @@
-import { checkCommonErrors } from "@/utils/error";
+import { checkCommonErrors, isInvalidGrantError } from "@/utils/error";
 import { trackError } from "@/utils/posthog";
 import type { Logger } from "@/utils/logger";
+import { recordRateLimitFromApiError } from "@/utils/email/rate-limit";
+import { cleanupInvalidTokens } from "@/utils/auth/cleanup-invalid-tokens";
 
 /**
  * Handles errors from async webhook processing in the same way as withError middleware
@@ -17,8 +19,30 @@ export async function handleWebhookError(
 ) {
   const { email, emailAccountId, url, logger } = options;
 
-  const apiError = checkCommonErrors(error, url);
+  if (isInvalidGrantError(error)) {
+    logger.warn("Invalid grant while processing webhook", { emailAccountId });
+
+    if (emailAccountId !== "unknown") {
+      await cleanupInvalidTokens({
+        emailAccountId,
+        reason: "invalid_grant",
+        logger,
+      });
+    }
+
+    return;
+  }
+
+  const apiError = checkCommonErrors(error, url, logger);
   if (apiError) {
+    await recordRateLimitFromApiError({
+      apiErrorType: apiError.type,
+      error,
+      emailAccountId,
+      logger,
+      source: url,
+    });
+
     await trackError({
       email,
       emailAccountId,

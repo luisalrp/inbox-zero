@@ -4,7 +4,7 @@ import * as React from "react";
 import { parse, format } from "date-fns";
 import { Card, CardContent } from "@/components/ui/card";
 import type { ChartConfig } from "@/components/ui/chart";
-import type { StatsByWeekResponse } from "@/app/api/user/stats/by-period/route";
+import type { StatsByPeriodResponse } from "@/app/api/user/stats/by-period/controller";
 import { BarChart } from "@/app/(app)/[emailAccountId]/stats/BarChart";
 import { COLORS } from "@/utils/colors";
 
@@ -26,28 +26,30 @@ function getActiveChart(activChart: keyof typeof chartConfig): string[] {
 }
 
 export function MainStatChart(props: {
-  data: StatsByWeekResponse;
+  data: StatsByPeriodResponse;
   period: "day" | "week" | "month" | "year";
 }) {
   const [activeChart, setActiveChart] =
     React.useState<keyof typeof chartConfig>("received");
 
-  const chartData = React.useMemo(() => {
-    return props.data.result.map((item) => {
-      const date = parse(item.startOfPeriod, "MMM dd, yyyy", new Date());
-      const dateStr = format(date, "yyyy-MM-dd");
+  const chartData = React.useMemo(
+    () =>
+      props.data.result.map((item) => {
+        const date = parse(item.startOfPeriod, "MMM dd, yyyy", new Date());
+        const dateStr = format(date, "yyyy-MM-dd");
 
-      return {
-        date: dateStr,
-        received: item.All,
-        read: item.Read,
-        sent: item.Sent,
-        archived: item.Archived,
-        unread: item.Unread,
-        inbox: item.Unarchived,
-      };
-    });
-  }, [props.data]);
+        return {
+          date: dateStr,
+          received: item.All,
+          read: item.Read,
+          sent: item.Sent,
+          archived: item.Archived,
+          unread: item.Unread,
+          inbox: item.Unarchived,
+        };
+      }),
+    [props.data],
+  );
 
   const total = React.useMemo(
     () => ({
@@ -62,36 +64,34 @@ export function MainStatChart(props: {
   );
 
   return (
-    <Card className="py-4 sm:py-0">
-      <div className="flex flex-col items-stretch border-b sm:flex-row">
-        <div className="flex w-full">
-          {(["received", "sent", "read", "archived"] as const).map((key) => {
-            const chart = key as keyof typeof chartConfig;
-            const isActive = activeChart === chart;
-            return (
-              <button
-                type="button"
-                key={chart}
-                data-active={isActive}
-                className="data-[active=true]:bg-muted/50 flex flex-1 min-w-0 flex-col justify-center gap-1 border-t px-6 py-4 text-left [&:not(:first-child)]:border-l sm:border-t-0 sm:px-8 sm:py-6"
-                onClick={() => setActiveChart(chart)}
-              >
-                <span className="text-muted-foreground text-xs flex items-center gap-1.5">
-                  <span
-                    className="h-2 w-2 rounded-full"
-                    style={{ backgroundColor: chartConfig[chart].color }}
-                  />
-                  {chartConfig[chart].label}
-                </span>
-                <span className="text-lg leading-none font-bold sm:text-3xl">
-                  {total[key].toLocaleString()}
-                </span>
-              </button>
-            );
-          })}
-        </div>
+    <Card className="py-0">
+      <div className="grid grid-cols-2 border-b sm:flex sm:flex-row">
+        {(["received", "sent", "read", "archived"] as const).map((key) => {
+          const chart = key as keyof typeof chartConfig;
+          const isActive = activeChart === chart;
+          return (
+            <button
+              type="button"
+              key={chart}
+              data-active={isActive}
+              className="data-[active=true]:bg-muted/50 flex flex-1 min-w-0 flex-col justify-center gap-1 px-6 py-4 text-left sm:px-8 sm:py-6 [&:nth-child(even)]:border-l [&:nth-child(n+3)]:border-t sm:[&:nth-child(n+3)]:border-t-0 sm:[&:nth-child(2)]:border-l sm:[&:nth-child(3)]:border-l sm:[&:nth-child(4)]:border-l"
+              onClick={() => setActiveChart(chart)}
+            >
+              <span className="text-muted-foreground text-xs flex items-center gap-1.5">
+                <span
+                  className="h-2 w-2 rounded-full"
+                  style={{ backgroundColor: chartConfig[chart].color }}
+                />
+                {chartConfig[chart].label}
+              </span>
+              <span className="text-lg leading-none font-bold sm:text-3xl">
+                {total[key].toLocaleString()}
+              </span>
+            </button>
+          );
+        })}
       </div>
-      <CardContent className="px-2 sm:p-6">
+      <CardContent className="p-6 pl-0 sm:px-2">
         <BarChart
           data={chartData}
           config={chartConfig}

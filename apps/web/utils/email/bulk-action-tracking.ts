@@ -1,6 +1,7 @@
 import { publishArchive, publishDelete } from "@inboxzero/tinybird";
 import { createScopedLogger } from "@/utils/logger";
 import prisma from "@/utils/prisma";
+import { runWithBoundedConcurrency } from "@/utils/async";
 
 const logger = createScopedLogger("bulk-action-tracking");
 
@@ -14,28 +15,28 @@ export async function publishBulkActionToTinybird(options: {
   const publishFn = action === "archive" ? publishArchive : publishDelete;
 
   const BATCH_SIZE = 100;
-  for (let i = 0; i < threadIds.length; i += BATCH_SIZE) {
-    const batch = threadIds.slice(i, i + BATCH_SIZE);
-
-    await Promise.allSettled(
-      batch.map((threadId) =>
-        publishFn({
-          ownerEmail,
-          threadId,
-          actionSource: "user",
-          timestamp,
-        }),
-      ),
-    ).then((results) => {
-      const failures = results.filter((r) => r.status === "rejected");
+  await runWithBoundedConcurrency({
+    items: threadIds,
+    concurrency: BATCH_SIZE,
+    run: (threadId) =>
+      publishFn({
+        ownerEmail,
+        threadId,
+        actionSource: "user",
+        timestamp,
+      }),
+    onBatchComplete: (results) => {
+      const failures = results.filter(
+        ({ result }) => result.status === "rejected",
+      );
       if (failures.length > 0) {
         logger.error("Failed to publish some events to Tinybird", {
           failureCount: failures.length,
-          totalCount: batch.length,
+          totalCount: results.length,
         });
       }
-    });
-  }
+    },
+  });
 }
 
 export async function updateEmailMessagesForSender(options: {
@@ -88,7 +89,7 @@ export async function updateEmailMessagesForSender(options: {
       sender,
       emailAccountId,
       action,
-      error: error instanceof Error ? error.message : error,
+      error,
     });
     // Don't throw - this is analytics, shouldn't break the main flow
   }

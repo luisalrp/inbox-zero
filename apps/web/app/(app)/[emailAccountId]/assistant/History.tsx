@@ -1,48 +1,60 @@
 "use client";
 
-import Link from "next/link";
-import { ExternalLinkIcon } from "lucide-react";
+import { Fragment, useMemo } from "react";
 import { useQueryState, parseAsInteger, parseAsString } from "nuqs";
+import { format, isToday, isYesterday } from "date-fns";
 import { LoadingContent } from "@/components/LoadingContent";
 import type { GetExecutedRulesResponse } from "@/app/api/user/executed-rules/history/route";
 import { AlertBasic } from "@/components/Alert";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { TablePagination } from "@/components/TablePagination";
 import { Badge } from "@/components/Badge";
 import { RulesSelect } from "@/app/(app)/[emailAccountId]/assistant/RulesSelect";
 import { useAccount } from "@/providers/EmailAccountProvider";
 import { useChat } from "@/providers/ChatProvider";
 import { useExecutedRules } from "@/hooks/useExecutedRules";
-import { decodeSnippet } from "@/utils/gmail/decode";
+import { useMessagesBatch } from "@/hooks/useMessagesBatch";
 import type { ParsedMessage } from "@/utils/types";
-import { ViewEmailButton } from "@/components/ViewEmailButton";
+import { EmailMessageCell } from "@/components/EmailMessageCell";
 import { FixWithChat } from "@/app/(app)/[emailAccountId]/assistant/FixWithChat";
 import { ResultsDisplay } from "@/app/(app)/[emailAccountId]/assistant/ResultDisplay";
-import { DateCell } from "@/app/(app)/[emailAccountId]/assistant/DateCell";
-import { isGoogleProvider } from "@/utils/email/provider-types";
-import { getEmailUrlForMessage } from "@/utils/url";
+
+type ExecutedRuleResult = GetExecutedRulesResponse["results"][number];
 
 export function History() {
   const [page] = useQueryState("page", parseAsInteger.withDefault(1));
   const [ruleId] = useQueryState("ruleId", parseAsString.withDefault("all"));
 
   const { data, isLoading, error } = useExecutedRules({ page, ruleId });
+  const results = data?.results ?? [];
+  const totalPages = data?.totalPages ?? 1;
+  const messageIds = useMemo(
+    () => results.map((result) => result.messageId),
+    [results],
+  );
+  const { data: messagesData, isLoading: isMessagesLoading } = useMessagesBatch(
+    {
+      ids: messageIds,
+    },
+  );
+  const messages = messagesData?.messages ?? [];
+  const messagesById = useMemo(() => mapMessagesById(messages), [messages]);
 
   return (
     <>
       <RulesSelect />
       <Card className="mt-2">
         <LoadingContent loading={isLoading} error={error}>
-          {data?.results.length ? (
-            <HistoryTable data={data.results} totalPages={data.totalPages} />
+          {results.length ? (
+            <HistoryTable
+              data={results}
+              totalPages={totalPages}
+              messagesById={messagesById}
+              messagesLoading={isMessagesLoading}
+            />
           ) : (
             <AlertBasic
               title="No history"
@@ -62,49 +74,64 @@ export function History() {
 function HistoryTable({
   data,
   totalPages,
+  messagesById,
+  messagesLoading,
 }: {
   data: GetExecutedRulesResponse["results"];
   totalPages: number;
+  messagesById: Record<string, ParsedMessage>;
+  messagesLoading: boolean;
 }) {
   const { userEmail } = useAccount();
   const { setInput } = useChat();
+  const groups = useMemo(() => groupByDate(data), [data]);
 
   return (
     <div>
       <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Email</TableHead>
-            <TableHead className="text-right">Rule</TableHead>
-          </TableRow>
-        </TableHeader>
         <TableBody>
-          {data.map((er) => (
-            <TableRow key={er.message.id}>
-              <TableCell>
-                <EmailCell
-                  from={er.message.headers.from}
-                  subject={er.message.headers.subject}
-                  snippet={er.message.snippet}
-                  threadId={er.message.threadId}
-                  messageId={er.message.id}
-                  userEmail={userEmail}
-                  createdAt={er.executedRules[0]?.createdAt}
-                />
-                {!er.executedRules[0]?.automated && (
-                  <Badge color="yellow" className="mt-2">
-                    Applied manually
-                  </Badge>
-                )}
-              </TableCell>
-              <TableCell>
-                <RuleCell
-                  executedRules={er.executedRules}
-                  message={er.message}
-                  setInput={setInput}
-                />
-              </TableCell>
-            </TableRow>
+          {groups.map((group) => (
+            <Fragment key={group.key}>
+              <TableRow className="hover:bg-transparent">
+                <TableCell
+                  colSpan={2}
+                  className="bg-muted/40 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                >
+                  {formatDateGroupLabel(group.date)}
+                </TableCell>
+              </TableRow>
+              {group.items.map((er) => {
+                const message = messagesById[er.messageId];
+                const isMessageLoading = !message && messagesLoading;
+
+                return (
+                  <TableRow key={er.messageId}>
+                    <TableCell>
+                      <EmailCell
+                        message={message}
+                        messageId={er.messageId}
+                        threadId={er.threadId}
+                        userEmail={userEmail}
+                        isMessageLoading={isMessageLoading}
+                      />
+                      {!er.executedRules[0]?.automated && (
+                        <Badge color="yellow" className="mt-2">
+                          Applied manually
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <RuleCell
+                        executedRules={er.executedRules}
+                        message={message}
+                        setInput={setInput}
+                        isMessageLoading={isMessageLoading}
+                      />
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </Fragment>
           ))}
         </TableBody>
       </Table>
@@ -115,44 +142,44 @@ function HistoryTable({
 }
 
 function EmailCell({
-  from,
-  subject,
-  snippet,
+  message,
   threadId,
   messageId,
   userEmail,
-  createdAt,
+  isMessageLoading,
 }: {
-  from: string;
-  subject: string;
-  snippet: string;
+  message?: ParsedMessage;
   threadId: string;
   messageId: string;
   userEmail: string;
-  createdAt: Date;
+  isMessageLoading: boolean;
 }) {
+  if (message) {
+    return (
+      <EmailMessageCell
+        sender={message.headers.from}
+        subject={message.headers.subject}
+        snippet={message.snippet}
+        userEmail={userEmail}
+        threadId={threadId}
+        messageId={messageId}
+        labelIds={message.labelIds}
+      />
+    );
+  }
+
+  if (isMessageLoading) {
+    return (
+      <div className="space-y-2">
+        <Skeleton className="h-5 w-48" />
+        <Skeleton className="h-4 w-72" />
+        <Skeleton className="h-4 w-80" />
+      </div>
+    );
+  }
+
   return (
-    <div className="flex flex-1 flex-col justify-center">
-      <div className="flex items-center justify-between">
-        <div className="font-semibold">{from}</div>
-        <DateCell createdAt={createdAt} />
-      </div>
-      <div className="mt-1 flex items-center font-medium">
-        <span>{subject}</span>
-        <OpenInGmailButton
-          messageId={messageId}
-          threadId={threadId}
-          userEmail={userEmail}
-        />
-        <ViewEmailButton
-          threadId={threadId}
-          messageId={messageId}
-          size="xs"
-          className="ml-2"
-        />
-      </div>
-      <div className="mt-1 text-muted-foreground">{decodeSnippet(snippet)}</div>
-    </div>
+    <span className="text-sm text-muted-foreground">Email unavailable</span>
   );
 }
 
@@ -160,47 +187,68 @@ function RuleCell({
   executedRules,
   message,
   setInput,
+  isMessageLoading,
 }: {
   executedRules: GetExecutedRulesResponse["results"][number]["executedRules"];
-  message: ParsedMessage;
+  message?: ParsedMessage;
   setInput: (input: string) => void;
+  isMessageLoading: boolean;
 }) {
   return (
     <div className="flex items-center justify-end gap-2">
       <div>
         <ResultsDisplay results={executedRules} />
       </div>
-      <FixWithChat
-        setInput={setInput}
-        message={message}
-        results={executedRules}
-      />
+      {message ? (
+        <FixWithChat
+          setInput={setInput}
+          message={message}
+          results={executedRules}
+        />
+      ) : isMessageLoading ? (
+        <Skeleton className="h-9 w-16" />
+      ) : (
+        <Button variant="outline" size="sm" disabled>
+          Fix
+        </Button>
+      )}
     </div>
   );
 }
 
-function OpenInGmailButton({
-  messageId,
-  threadId,
-  userEmail,
-}: {
-  messageId: string;
-  threadId: string;
-  userEmail: string;
-}) {
-  const { provider } = useAccount();
+function mapMessagesById(messages: ParsedMessage[]) {
+  return messages.reduce<Record<string, ParsedMessage>>((acc, message) => {
+    acc[message.id] = message;
+    return acc;
+  }, {});
+}
 
-  if (!isGoogleProvider(provider)) {
-    return null;
+function groupByDate(items: ExecutedRuleResult[]) {
+  const groups: {
+    key: string;
+    date: Date | null;
+    items: ExecutedRuleResult[];
+  }[] = [];
+  for (const item of items) {
+    const createdAt = item.executedRules[0]?.createdAt;
+    const date = createdAt ? new Date(createdAt) : null;
+    const key = date ? format(date, "yyyy-MM-dd") : "unknown";
+    const last = groups[groups.length - 1];
+    if (last?.key === key) {
+      last.items.push(item);
+    } else {
+      groups.push({ key, date, items: [item] });
+    }
   }
+  return groups;
+}
 
-  return (
-    <Link
-      href={getEmailUrlForMessage(messageId, threadId, userEmail, provider)}
-      target="_blank"
-      className="ml-2 text-muted-foreground hover:text-foreground"
-    >
-      <ExternalLinkIcon className="h-4 w-4" />
-    </Link>
-  );
+function formatDateGroupLabel(date: Date | null) {
+  if (!date) return "Unknown date";
+  if (isToday(date)) return "Today";
+  if (isYesterday(date)) return "Yesterday";
+  if (date.getFullYear() === new Date().getFullYear()) {
+    return format(date, "EEEE, MMM d");
+  }
+  return format(date, "EEEE, MMM d, yyyy");
 }

@@ -16,10 +16,17 @@ import { describe, test, expect, beforeAll, vi } from "vitest";
 import { NextRequest } from "next/server";
 import prisma from "@/utils/prisma";
 import { createEmailProvider } from "@/utils/email/provider";
-import { webhookBodySchema } from "@/app/api/outlook/webhook/types";
-import { findOldMessage } from "@/__tests__/e2e/helpers";
+import { webhookBodySchema } from "@/utils/webhook/outlook/types";
+import {
+  ensureCatchAllTestRule,
+  ensureTestPremiumAccount,
+  findOldMessage,
+} from "@/__tests__/e2e/helpers";
 import { sleep } from "@/utils/sleep";
 import type { EmailProvider } from "@/utils/email/types";
+import { createTestLogger } from "@/__tests__/helpers";
+
+const logger = createTestLogger();
 
 // ============================================
 // TEST DATA - SET VIA ENVIRONMENT VARIABLES
@@ -31,23 +38,12 @@ const TEST_CONVERSATION_ID =
   "AQQkADAwATNiZmYAZS05YWEAYy1iNWY0LTAwAi0wMAoAEABuo-fmt9KvQ4u55KlWB32H"; // Real conversation ID from demoinboxzero@outlook.com
 const TEST_CATEGORY_NAME = process.env.TEST_CATEGORY_NAME || "To Reply";
 
-vi.mock("server-only", () => ({}));
-
 vi.mock("@/utils/redis/message-processing", () => ({
+  acquireOutboundMessageLock: vi.fn().mockResolvedValue("lock-token-1"),
+  clearOutboundMessageLock: vi.fn().mockResolvedValue(true),
   markMessageAsProcessing: vi.fn().mockResolvedValue(true),
+  markOutboundMessageProcessed: vi.fn().mockResolvedValue(true),
 }));
-
-// Mock Next.js after() to run synchronously and await in tests
-vi.mock("next/server", async () => {
-  const actual =
-    await vi.importActual<typeof import("next/server")>("next/server");
-  return {
-    ...actual,
-    after: async (fn: () => void | Promise<void>) => {
-      await fn();
-    },
-  };
-});
 
 describe.skipIf(!RUN_E2E_TESTS)("Outlook Operations Integration Tests", () => {
   let provider: EmailProvider;
@@ -83,6 +79,7 @@ describe.skipIf(!RUN_E2E_TESTS)("Outlook Operations Integration Tests", () => {
     provider = await createEmailProvider({
       emailAccountId: emailAccount.id,
       provider: "microsoft",
+      logger,
     });
 
     console.log(`\n✅ Using account: ${emailAccount.email}`);
@@ -109,7 +106,7 @@ describe.skipIf(!RUN_E2E_TESTS)("Outlook Operations Integration Tests", () => {
           "   ℹ️  No messages found (may be expected if conversationId is old)",
         );
       }
-    });
+    }, 30_000);
 
     test("should handle conversationId with special characters", async () => {
       // Conversation IDs can contain base64-like characters including -, _, and sometimes =
@@ -193,7 +190,7 @@ describe.skipIf(!RUN_E2E_TESTS)("Outlook Operations Integration Tests", () => {
     });
 
     test("should create a new label", async () => {
-      const testLabelName = `Test Label ${Date.now()}`;
+      const testLabelName = `Outlook-Ops Label ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       const newLabel = await provider.createLabel(testLabelName);
 
       expect(newLabel).toBeDefined();
@@ -236,23 +233,20 @@ describe.skipIf(!RUN_E2E_TESTS)("Outlook Operations Integration Tests", () => {
 
   describe("Search queries", () => {
     test("should handle search queries with colons", async () => {
-      // Known issue: Outlook search doesn't support "field:" syntax like Gmail
-      // The query "subject:lunch tomorrow?" causes:
-      // "Syntax error: character ':' is not valid at position 7"
-      // Instead, Outlook uses KQL syntax or plain text search
-
-      const invalidQuery = "subject:lunch tomorrow?";
+      // getMessagesWithPagination strips Gmail-style prefixes and uses plain $search
+      // subject:lunch -> "lunch" for $search (searches subject and body)
+      const queryWithPrefix = "subject:lunch tomorrow?";
       const validQuery = "lunch tomorrow"; // Plain text search
 
-      // Test that invalid query throws an error
-      await expect(
-        provider.getMessagesWithPagination({
-          query: invalidQuery,
-          maxResults: 10,
-        }),
-      ).rejects.toThrow();
+      // Test that query with prefix works (prefix gets stripped)
+      const resultWithPrefix = await provider.getMessagesWithPagination({
+        query: queryWithPrefix,
+        maxResults: 10,
+      });
+      expect(resultWithPrefix.messages).toBeDefined();
+      expect(Array.isArray(resultWithPrefix.messages)).toBe(true);
 
-      // Test that valid query works
+      // Test that plain query works
       const result = await provider.getMessagesWithPagination({
         query: validQuery,
         maxResults: 10,
@@ -266,15 +260,12 @@ describe.skipIf(!RUN_E2E_TESTS)("Outlook Operations Integration Tests", () => {
 
     test("should handle special characters in search queries", async () => {
       // Test various special characters
-      // Note: Outlook KQL has restrictions - some chars like : cause syntax errors
+      // Note: getMessagesWithPagination strips Gmail-style prefixes for $search
       const validQueries = [
         "lunch tomorrow", // Plain text (should work)
         "test example", // Multiple words (should work)
         "can we meet tomorrow?", // Question mark should be sanitized
-      ];
-
-      const invalidQueries = [
-        "test:query", // Colon causes syntax error
+        "subject:test query", // Gmail prefix gets stripped, searches "test query"
       ];
 
       // Test valid queries
@@ -288,17 +279,6 @@ describe.skipIf(!RUN_E2E_TESTS)("Outlook Operations Integration Tests", () => {
         console.log(
           `   ✅ Query "${query}" returned ${result.messages.length} messages`,
         );
-      }
-
-      // Test that invalid queries throw errors
-      for (const query of invalidQueries) {
-        await expect(
-          provider.getMessagesWithPagination({
-            query,
-            maxResults: 5,
-          }),
-        ).rejects.toThrow();
-        console.log(`   ✅ Query "${query}" correctly threw an error`);
       }
     });
   });
@@ -344,6 +324,7 @@ describe.skipIf(!RUN_E2E_TESTS)("Outlook Webhook Payload", () => {
     const provider = await createEmailProvider({
       emailAccountId: emailAccount.id,
       provider: "microsoft",
+      logger,
     });
 
     const testMessage = await findOldMessage(provider, 7);
@@ -355,39 +336,9 @@ describe.skipIf(!RUN_E2E_TESTS)("Outlook Webhook Payload", () => {
       data: { watchEmailsSubscriptionId: MOCK_SUBSCRIPTION_ID },
     });
 
-    // Make the account premium for testing
-    const user = await prisma.user.findUniqueOrThrow({
-      where: { id: emailAccount.userId },
-      include: { premium: true },
-    });
-
-    // Clear any existing aiApiKey to use env defaults
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { aiApiKey: null },
-    });
-
-    if (!user.premium) {
-      const premium = await prisma.premium.create({
-        data: {
-          tier: "BUSINESS_MONTHLY",
-          stripeSubscriptionStatus: "active",
-        },
-      });
-
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { premiumId: premium.id },
-      });
-    } else {
-      await prisma.premium.update({
-        where: { id: user.premium.id },
-        data: {
-          stripeSubscriptionStatus: "active",
-          tier: "BUSINESS_MONTHLY",
-        },
-      });
-    }
+    // Set up premium and test rule
+    await ensureTestPremiumAccount(emailAccount.userId);
+    await ensureCatchAllTestRule(emailAccount.id);
 
     await prisma.executedRule.deleteMany({
       where: {
@@ -395,32 +346,6 @@ describe.skipIf(!RUN_E2E_TESTS)("Outlook Webhook Payload", () => {
         messageId: testMessage.messageId,
       },
     });
-
-    // Ensure the user has at least one enabled rule for automation
-    const existingRule = await prisma.rule.findFirst({
-      where: {
-        emailAccountId: emailAccount.id,
-        enabled: true,
-      },
-    });
-
-    if (!existingRule) {
-      await prisma.rule.create({
-        data: {
-          name: "Test Rule for Webhook",
-          emailAccountId: emailAccount.id,
-          enabled: true,
-          automate: true,
-          instructions: "Reply to emails about testing",
-          actions: {
-            create: {
-              type: "DRAFT_EMAIL",
-              content: "Test reply",
-            },
-          },
-        },
-      });
-    }
 
     // This test requires a real Outlook account
     const { POST } = await import("@/app/api/outlook/webhook/route");
@@ -519,6 +444,7 @@ describe.skipIf(!RUN_E2E_TESTS)("Outlook Webhook Payload", () => {
       const provider = await createEmailProvider({
         emailAccountId: emailAccount.id,
         provider: "microsoft",
+        logger,
       });
 
       const draft = await provider.getDraft(draftAction.draftId);
@@ -535,7 +461,7 @@ describe.skipIf(!RUN_E2E_TESTS)("Outlook Webhook Payload", () => {
       console.log(`      Subject: ${draft?.subject || "(no subject)"}`);
       console.log("      Content:");
       console.log(
-        `        ${draft?.textPlain?.substring(0, 200).replace(/\n/g, "\n        ") || "(empty)"}`,
+        `        ${draft?.textPlain?.slice(0, 200).replace(/\n/g, "\n        ") || "(empty)"}`,
       );
       if (draft?.textPlain && draft.textPlain.length > 200) {
         console.log(`        ... (${draft.textPlain.length} total characters)`);
@@ -543,7 +469,7 @@ describe.skipIf(!RUN_E2E_TESTS)("Outlook Webhook Payload", () => {
     } else {
       console.log("   ℹ️  No draft action found");
     }
-  }, 30_000);
+  }, 60_000);
 
   test("should verify draft ID can be fetched immediately after creation", async () => {
     const emailAccount = await prisma.emailAccount.findUniqueOrThrow({
@@ -553,6 +479,7 @@ describe.skipIf(!RUN_E2E_TESTS)("Outlook Webhook Payload", () => {
     const provider = await createEmailProvider({
       emailAccountId: emailAccount.id,
       provider: "microsoft",
+      logger,
     });
 
     const testMessage = await findOldMessage(provider, 7);
@@ -578,7 +505,7 @@ describe.skipIf(!RUN_E2E_TESTS)("Outlook Webhook Payload", () => {
     console.log(`      Draft ID: ${draftResult.draftId}`);
     console.log(`      Fetched ID: ${fetchedDraft?.id}`);
     console.log(
-      `      Content preview: ${fetchedDraft?.textPlain?.substring(0, 50) || "(empty)"}...`,
+      `      Content preview: ${fetchedDraft?.textPlain?.slice(0, 50) || "(empty)"}...`,
     );
 
     // Clean up - delete the test draft
