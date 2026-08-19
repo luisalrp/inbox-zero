@@ -2,15 +2,10 @@
 
 import { useEffect, useMemo } from "react";
 import { useSWRConfig } from "swr";
-import type { ThreadResponse } from "@/app/api/threads/[id]/route";
 import {
-  createThreadRequest,
-  fetchThreadRequest,
-} from "@/utils/email-cache/thread-request";
-import {
-  readCachedThread,
-  writeCachedThread,
-} from "@/utils/email-cache/threads";
+  prefetchThreadDetail,
+  shouldPrefetchThreads,
+} from "@/app/(app)/[emailAccountId]/mail/thread-prefetch";
 
 export function useAdjacentThreadPrefetch({
   currentThreadId,
@@ -33,55 +28,21 @@ export function useAdjacentThreadPrefetch({
   }, [currentThreadId, threadIds]);
 
   useEffect(() => {
-    if (!fetcher || !shouldPrefetch() || !adjacentThreadIds.length) return;
+    if (!fetcher || !shouldPrefetchThreads() || !adjacentThreadIds.length)
+      return;
     let cancelled = false;
 
     const prefetch = () => {
       for (const threadId of adjacentThreadIds) {
-        const request = createThreadRequest({
+        prefetchThreadDetail({
           emailAccountId,
           threadId,
-          options: { includeDrafts: true },
+          fetcher,
+          mutate,
+          isCancelled: () => cancelled,
+        }).catch(() => {
+          // Prefetch failures are intentionally silent; opening still retries normally.
         });
-        readCachedThread<ThreadResponse>({
-          emailAccountId,
-          threadId,
-          variant: request.variant,
-        })
-          .then(async (cached) => {
-            if (cancelled) return;
-            if (cached) {
-              await mutate<ThreadResponse>(
-                request.key,
-                (current) => current ?? cached.data,
-                {
-                  populateCache: true,
-                  revalidate: false,
-                },
-              );
-              return;
-            }
-
-            const data = await fetchThreadRequest<ThreadResponse | undefined>(
-              request,
-              async () =>
-                (await fetcher(request.key)) as ThreadResponse | undefined,
-            );
-            if (!data) return;
-            await mutate(request.key, data, {
-              populateCache: true,
-              revalidate: false,
-            });
-            await writeCachedThread({
-              emailAccountId,
-              threadId,
-              variant: request.variant,
-              data,
-            });
-          })
-          .catch(() => {
-            // Prefetch failures are intentionally silent; opening still retries normally.
-          });
       }
     };
 
@@ -97,18 +58,4 @@ export function useAdjacentThreadPrefetch({
       if (timeout !== undefined) window.clearTimeout(timeout);
     };
   }, [adjacentThreadIds, emailAccountId, fetcher, mutate]);
-}
-
-function shouldPrefetch() {
-  if (document.visibilityState !== "visible") return false;
-  const connection = (
-    navigator as Navigator & {
-      connection?: { effectiveType?: string; saveData?: boolean };
-    }
-  ).connection;
-  return (
-    !connection?.saveData &&
-    connection?.effectiveType !== "slow-2g" &&
-    connection?.effectiveType !== "2g"
-  );
 }

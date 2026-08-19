@@ -203,6 +203,7 @@ model EmailAccount {
   chatMemories     ChatMemory[]
   digests          Digest[]
   scheduledActions ScheduledAction[]
+  snoozedThreads   SnoozedThread[]
   responseTimes    ResponseTime[]
   actions          Action[]
 
@@ -323,7 +324,7 @@ model Member {
   id                     String       @id @default(cuid())
   organizationId         String
   emailAccountId         String
-  role                   String       @default("member") // "admin" | "member"
+  role                   String       @default("member") // "owner" | "admin" | "member"
   allowOrgAdminAnalytics Boolean      @default(false)
   createdAt              DateTime     @default(now())
   updatedAt              DateTime     @updatedAt
@@ -802,6 +803,20 @@ model ScheduledAction {
   @@index([executedRuleId])
   @@index([status, scheduledFor])
   @@index([emailAccountId, messageId])
+}
+
+model SnoozedThread {
+  id           String              @id @default(cuid())
+  updatedAt    DateTime            @updatedAt
+  threadId     String
+  scheduledFor DateTime
+  status       SnoozedThreadStatus @default(PENDING)
+
+  emailAccountId String
+  emailAccount   EmailAccount @relation(fields: [emailAccountId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledFor])
+  @@index([emailAccountId, threadId, status])
 }
 
 // Notes:
@@ -1390,6 +1405,22 @@ model MeetingBriefing {
 
   @@unique([emailAccountId, calendarEventId]) // Prevent duplicate briefings
   @@index([emailAccountId])
+}
+
+// Shared public research intentionally has no user or account relation, so
+// its history cannot reveal which tenant triggered a refresh.
+model ContactResearch {
+  id                String   @id @default(cuid())
+  createdAt         DateTime @default(now())
+  email             String
+  researchStartedAt DateTime
+  found             Boolean
+  role              String?
+  confidence        String?
+  company           Json? // { name, domain, website, description, industry, employeeCount, funding }
+  sources           String[] @default([])
+
+  @@index([email, researchStartedAt(sort: Desc), createdAt(sort: Desc), id(sort: Desc)], map: "ContactResearch_latest_idx")
 }
 
 enum MeetingJoinRule {
@@ -2063,6 +2094,13 @@ enum ScheduledActionStatus {
   EXECUTING
   COMPLETED
   FAILED
+  CANCELLED
+}
+
+enum SnoozedThreadStatus {
+  PENDING
+  EXECUTING
+  COMPLETED
   CANCELLED
 }
 

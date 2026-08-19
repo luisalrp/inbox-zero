@@ -1,7 +1,10 @@
 import type { MailFolder } from "@microsoft/microsoft-graph-types";
 import type { OutlookClient } from "./client-types";
 import type { Logger } from "@/utils/logger";
-import { withOutlookRetry } from "@/utils/outlook/retry";
+import {
+  withMicrosoftGraphRetry,
+  withMicrosoftGraphWriteRetry,
+} from "@/utils/microsoft/retry";
 
 export type OutlookSystemFolder =
   | "INBOX"
@@ -44,7 +47,7 @@ export async function getOutlookRootFolders(
   client: OutlookClient,
   logger: Logger,
 ): Promise<OutlookFolder[]> {
-  const response: { value: MailFolder[] } = await withOutlookRetry(
+  const response: { value: MailFolder[] } = await withMicrosoftGraphRetry(
     () =>
       client
         .getClient()
@@ -66,7 +69,7 @@ export async function getOutlookChildFolders(
   folderId: string,
   logger: Logger,
 ): Promise<OutlookFolder[]> {
-  const response: { value: MailFolder[] } = await withOutlookRetry(
+  const response: { value: MailFolder[] } = await withMicrosoftGraphRetry(
     () =>
       client
         .getClient()
@@ -89,7 +92,7 @@ async function findOutlookFolderByName(
   logger: Logger,
 ): Promise<OutlookFolder | undefined> {
   try {
-    const response: { value: MailFolder[] } = await withOutlookRetry(
+    const response: { value: MailFolder[] } = await withMicrosoftGraphRetry(
       () =>
         client
           .getClient()
@@ -215,7 +218,7 @@ export async function getOrCreateOutlookFolderIdByName(
   }
 
   try {
-    const response = await withOutlookRetry(
+    const response = await withMicrosoftGraphWriteRetry(
       () =>
         client.getClient().api("/me/mailFolders").post({
           displayName: folderName,

@@ -1,7 +1,8 @@
 "use client";
 
-import type { ReactNode } from "react";
-import { MailIcon } from "lucide-react";
+import { useState, type ComponentProps, type ReactNode } from "react";
+import dynamic from "next/dynamic";
+import { Loader2Icon, MailIcon } from "lucide-react";
 import { ReaderToolbar } from "@/app/(app)/[emailAccountId]/mail/ReaderToolbar";
 import type {
   ListThread,
@@ -10,16 +11,30 @@ import type {
 import { EmailThread } from "@/components/email-list/EmailThread";
 import type { ThreadMessage } from "@/components/email-list/types";
 import { getEmailMessageCellLabels } from "@/components/EmailMessageCellLabels";
+import { LoadingContent } from "@/components/LoadingContent";
 import type { EmailLabels } from "@/providers/email-label-types";
 import {
   extractEmailAddress,
   extractNameFromEmail,
+  isSameEmailAddress,
   participant,
 } from "@/utils/email";
 
+const SenderContextSheet = dynamic(
+  () =>
+    import("@/app/(app)/[emailAccountId]/mail/SenderContextSheet").then(
+      (module) => module.SenderContextSheet,
+    ),
+  { ssr: false },
+);
+
 export type ThreadReaderProps = {
-  /** The row that is open. `null` renders the empty state. */
+  /** The row that is open. It may lag behind the selected thread while loading. */
   thread: ListThread | null;
+  /** The selected thread, including while its row and messages are loading. */
+  threadId: string | null;
+  loading: boolean;
+  error?: ComponentProps<typeof LoadingContent>["error"];
   /**
    * The open thread's full messages. The list payload has no bodies, so this
    * arrives from a second fetch; the header renders before it lands.
@@ -38,6 +53,7 @@ export type ThreadReaderProps = {
   onReply: () => void;
   onDelete: () => void;
   onToggleFocusMode: () => void;
+  showSidebarToggle?: boolean;
   /** Refreshes the open thread after a reply is sent or a draft changes. */
   refetch: () => void;
   /**
@@ -51,6 +67,9 @@ export type ThreadReaderProps = {
 
 export function ThreadReader({
   thread,
+  threadId,
+  loading,
+  error,
   messages,
   userEmail,
   userLabels,
@@ -64,20 +83,35 @@ export function ThreadReader({
   onReply,
   onDelete,
   onToggleFocusMode,
+  showSidebarToggle = false,
   refetch,
   autoOpenReplyForMessageId,
   menu,
 }: ThreadReaderProps) {
-  const headerMessage = thread?.messages.at(-1);
+  const [senderContextState, setSenderContextState] = useState<
+    "unloaded" | "open" | "closed"
+  >("unloaded");
+  const headerMessage = thread?.messages.at(-1) ?? messages.at(-1);
 
-  if (!thread || !headerMessage) {
+  if (error || !headerMessage) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-2 px-6 py-16 text-center">
-        <MailIcon className="size-6 text-muted-foreground" />
-        <div className="text-foreground text-sm">Nothing selected</div>
-        <div className="text-muted-foreground text-xs">
-          Pick another view, or head back to the inbox.
-        </div>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-2 px-6 py-16 text-center">
+        <LoadingContent
+          error={error}
+          loading={loading}
+          loadingComponent={
+            <Loader2Icon
+              aria-label="Loading email"
+              className="size-6 animate-spin text-muted-foreground"
+            />
+          }
+        >
+          <MailIcon className="size-6 text-muted-foreground" />
+          <div className="text-foreground text-sm">Nothing selected</div>
+          <div className="text-muted-foreground text-xs">
+            Pick another view, or head back to the inbox.
+          </div>
+        </LoadingContent>
       </div>
     );
   }
@@ -89,40 +123,65 @@ export function ThreadReader({
       userLabels,
     }) ?? [];
 
-  return (
-    // White, unlike the list: the reader is its own surface, and it has to
-    // match `EmailThread` below or the toolbar reads as a separate band.
-    <div className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-card">
-      <div className={readerMeasure({ layout, isFocusMode })}>
-        <ReaderToolbar
-          isFocusMode={isFocusMode}
-          labelHref={labelHref}
-          labels={labels}
-          layout={layout}
-          menu={menu}
-          onArchive={onArchive}
-          onBack={onBack}
-          onDelete={onDelete}
-          onRemoveLabel={onRemoveLabel}
-          onReply={onReply}
-          onToggleFocusMode={onToggleFocusMode}
-          position={position}
-          senderEmail={extractEmailAddress(sender)}
-          senderName={extractNameFromEmail(sender)}
-          subject={headerMessage.headers.subject}
-        />
+  const senderEmail = extractEmailAddress(sender);
+  const senderName = extractNameFromEmail(sender);
+  const canResearchSender =
+    Boolean(senderEmail) && !isSameEmailAddress(senderEmail, userEmail);
 
-        {messages.length > 0 ? (
-          <EmailThread
-            autoOpenReplyForMessageId={autoOpenReplyForMessageId}
-            key={thread.id}
-            messages={messages}
-            refetch={refetch}
-            showReplyButton
+  return (
+    <>
+      {/* White, unlike the list: the reader is its own surface, and it has to
+      match `EmailThread` below or the toolbar reads as a separate band. */}
+      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-card">
+        <div className={readerMeasure({ layout, isFocusMode })}>
+          <ReaderToolbar
+            isFocusMode={isFocusMode}
+            labelHref={labelHref}
+            labels={labels}
+            layout={layout}
+            menu={menu}
+            onArchive={onArchive}
+            onBack={onBack}
+            onDelete={onDelete}
+            onOpenSenderContext={
+              canResearchSender
+                ? () => setSenderContextState("open")
+                : undefined
+            }
+            onRemoveLabel={onRemoveLabel}
+            onReply={onReply}
+            onToggleFocusMode={onToggleFocusMode}
+            position={position}
+            senderEmail={senderEmail}
+            senderName={senderName}
+            showSidebarToggle={showSidebarToggle}
+            subject={headerMessage.headers.subject}
           />
-        ) : null}
+
+          {messages.length > 0 ? (
+            <EmailThread
+              autoOpenReplyForMessageId={autoOpenReplyForMessageId}
+              key={threadId}
+              messages={messages}
+              refetch={refetch}
+              showReplyButton
+            />
+          ) : null}
+        </div>
       </div>
-    </div>
+
+      {senderContextState === "unloaded" ? null : (
+        <SenderContextSheet
+          messageId={headerMessage.id}
+          onOpenChange={(open: boolean) =>
+            setSenderContextState(open ? "open" : "closed")
+          }
+          open={senderContextState === "open"}
+          senderEmail={senderEmail}
+          senderName={senderName}
+        />
+      )}
+    </>
   );
 }
 

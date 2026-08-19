@@ -1,4 +1,4 @@
-import { ArchiveIcon, type LucideIcon } from "lucide-react";
+import { ArchiveIcon, PenLineIcon, type LucideIcon } from "lucide-react";
 import type { Command, CommandSection } from "@/lib/commands/types";
 import { createClientLogger } from "@/utils/logger-client";
 
@@ -153,6 +153,13 @@ const SHORTCUT_DEFINITIONS = [
     },
   },
   {
+    id: "snooze",
+    keys: ["h"],
+    scope: "mail",
+    group: "Triage",
+    label: "Snooze",
+  },
+  {
     // `#` sits behind shift on US layouts and in front of it on others.
     id: "delete",
     keys: ["shift+#", "#", "backspace"],
@@ -217,6 +224,12 @@ const SHORTCUT_DEFINITIONS = [
     scope: "global",
     group: "Assistant & rules",
     label: "New message",
+    palette: {
+      section: "actions",
+      keywords: ["compose", "write", "email"],
+      priority: 20,
+      icon: PenLineIcon,
+    },
   },
   {
     id: "send",

@@ -14,6 +14,7 @@ const withMDX = nextMdx({
 
 const isDevelopment = process.env.NODE_ENV === "development";
 const isProductionBuild = process.env.NODE_ENV === "production";
+const playwrightRunId = process.env.PLAYWRIGHT_RUN_ID;
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const nextPackageRoot = path.dirname(
   realpathSync(require.resolve("next/package.json")),
@@ -26,6 +27,13 @@ const zodV4CorePath = path.join(
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1"],
+  // Sequential Playwright feature groups use separate dev servers. Isolating
+  // their caches prevents a new Turbopack process from restoring stale tasks.
+  ...(playwrightRunId
+    ? {
+        distDir: path.join(".tmp", "playwright", playwrightRunId, "next"),
+      }
+    : {}),
   experimental:
     isDevelopment || isProductionBuild
       ? {
@@ -39,13 +47,21 @@ const nextConfig: NextConfig = {
                 // route modules into memory at startup during local
                 // development.
                 preloadEntriesOnStart: false,
+                // Playwright already isolates feature groups in short-lived
+                // dev servers. Restarting one mid-test aborts active requests.
+                ...(playwrightRunId
+                  ? { devMemoryThresholdRestart: false }
+                  : {}),
               }
             : {}),
           ...(isProductionBuild
             ? {
                 // Keep the static build from fanning out too many workers at
                 // once. This trades a bit of build time for lower peak RAM.
-                staticGenerationMaxConcurrency: 4,
+                // Docker image builds share Depot workers; keep concurrency
+                // even lower there to avoid OOM keepalive failures.
+                staticGenerationMaxConcurrency:
+                  process.env.DOCKER_BUILD === "true" ? 2 : 4,
                 staticGenerationMinPagesPerWorker: 100,
               }
             : {}),
@@ -379,7 +395,8 @@ const nextConfig: NextConfig = {
       },
     },
   },
-  // Skip TypeScript checking during E2E CI builds to save memory
+  // Skip TypeScript checking during Docker/E2E CI builds to save memory.
+  // App typechecking is covered by the Build Check workflow.
   typescript: {
     ignoreBuildErrors: process.env.SKIP_TYPE_CHECK === "true",
   },
@@ -462,7 +479,14 @@ function commonAncestorPath(firstPath: string, secondPath: string) {
     commonParts.push(firstParts[index]);
   }
 
-  return commonParts.length === 1 && commonParts[0] === ""
-    ? path.sep
-    : commonParts.join(path.sep);
+  if (commonParts.length === 1 && commonParts[0] === "") {
+    return path.sep;
+  }
+
+  // A bare Windows drive is relative to that drive's current directory.
+  if (commonParts.length === 1 && /^[A-Za-z]:$/.test(commonParts[0] ?? "")) {
+    return `${commonParts[0]}${path.sep}`;
+  }
+
+  return commonParts.join(path.sep);
 }
